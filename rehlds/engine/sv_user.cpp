@@ -116,7 +116,7 @@ bool SV_ReadModelBoundsResponse(const resource_t *r)
 	// Requirement is stored scrambled
 	unsigned char required[sizeof(r->rguc_reserved)];
 	Q_memcpy(required, r->rguc_reserved, sizeof(required));
-	COM_UnMunge(required, sizeof(required), g_psvs.spawncount);
+	//COM_UnMunge(required, sizeof(required), g_psvs.spawncount);
 
 	vec3_t mins;
 	vec3_t maxs;
@@ -157,7 +157,7 @@ void SV_ParseConsistencyResponse(client_t *pSenderClient)
 		return;
 	}
 
-	COM_UnMunge(&net_message.data[msg_readcount], length, g_psvs.spawncount);
+	//COM_UnMunge(&net_message.data[msg_readcount], length, g_psvs.spawncount);
 	MSG_StartBitReading(&net_message);
 
 	resource_t *resources = SV_GetResourceList();
@@ -170,7 +170,7 @@ void SV_ParseConsistencyResponse(client_t *pSenderClient)
 	// Read consistency info
 	while (MSG_ReadBits(1))
 	{
-		int idx = MSG_ReadBits(12);
+		int idx = MSG_ReadBits(16);
 		if (idx < 0 || idx >= g_psv.num_resources)
 		{
 			dropclient = -1;
@@ -296,7 +296,7 @@ void SV_SetupModelConsistency(resource_t *r, const consistency_t *pc, const char
 	}
 
 	r->rguc_reserved[0] = pc->check_type;
-	COM_Munge(r->rguc_reserved, sizeof(r->rguc_reserved), g_psvs.spawncount);
+	//COM_Munge(r->rguc_reserved, sizeof(r->rguc_reserved), g_psvs.spawncount);
 }
 
 int EXT_FUNC SV_TransferConsistencyInfo_internal(void)
@@ -384,7 +384,7 @@ void SV_SendConsistencyList(sizebuf_t *msg)
 		if (delta > 31)
 		{
 			MSG_WriteBits(0, 1);
-			MSG_WriteBits(i, 10);	// LIMIT: Here it write index, not a diff, with resolution of 10 bits. So, it limits not adjacent index to 1023 max.
+			MSG_WriteBits(i, 16);	// LIMIT: Here it write index, not a diff, with resolution of 10 bits. So, it limits not adjacent index to 1023 max.
 		}
 		else
 		{
@@ -1472,7 +1472,9 @@ void SV_ParseStringCommand(client_t *pSenderClient)
 
 void SV_ParseDelta(client_t *pSenderClient)
 {
-	host_client->delta_sequence = MSG_ReadByte();
+	MSG_StartBitReading(&net_message);
+	host_client->delta_sequence = MSG_ReadBits(16);
+	MSG_EndBitReading(&net_message);
 }
 
 void EXT_FUNC SV_EstablishTimeBase_mod(IGameClient *cl, usercmd_t *cmds, int dropped, int numbackup, int numcmds)
@@ -1578,16 +1580,6 @@ void SV_ParseMove(client_t *pSenderClient)
 	int mlen = MSG_ReadByte();
 	byte cbchecksum = MSG_ReadByte();
 
-	if (mlen <= 0 || !SZ_HasSpaceToRead(&net_message, mlen))
-	{
-		msg_badread = TRUE;
-		Con_DPrintf("%s:  %s:%s invalid length: %d\n", __func__, host_client->name, NET_AdrToString(host_client->netchan.remote_address), mlen);
-		SV_DropClient(host_client, FALSE, "Invalid length");
-		return;
-	}
-
-	COM_UnMunge(&net_message.data[placeholder + 1], mlen, host_client->netchan.incoming_sequence);
-
 	unsigned int packetLossByte = MSG_ReadByte();
 	int numbackup = MSG_ReadByte();
 	int numcmds = MSG_ReadByte();
@@ -1623,14 +1615,6 @@ void SV_ParseMove(client_t *pSenderClient)
 	if (msg_badread)
 	{
 		Con_Printf("Client %s:%s sent a bogus command packet\n", host_client->name, NET_AdrToString(host_client->netchan.remote_address));
-		return;
-	}
-
-	byte cbpktchecksum = COM_BlockSequenceCRCByte(&net_message.data[placeholder + 1], msg_readcount - placeholder - 1, host_client->netchan.incoming_sequence);
-	if (cbpktchecksum != cbchecksum)
-	{
-		Con_DPrintf("Failed command checksum for %s:%s\n", host_client->name, NET_AdrToString(host_client->netchan.remote_address));
-		msg_badread = TRUE;
 		return;
 	}
 
