@@ -35,6 +35,8 @@ CGameClient::CGameClient(int id, client_t* cl)
 #ifdef REHLDS_FIXES
 	, m_localGameTimeBase(0)
 	, m_reconnectDeadline(0)
+	, m_nProcessedUsrcmdsThisVeryTick(0)
+	, m_flLastUsrcmdsWarningPrintTime(0)
 #endif
 {
 	m_Id = id;

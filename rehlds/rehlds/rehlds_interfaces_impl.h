@@ -93,6 +93,11 @@ private:
 	// its connection, or SV_CheckTimeouts force-drops it. Armed in SV_InactivateClients, cleared
 	// in SV_ConnectClient_internal. 0 = not armed. See sv_reconnect_timeout.
 	double m_reconnectDeadline;
+
+	// sv_rehlds_maxusrcmdprocessticks: usercmds this client had processed in the current server
+	// frame (reset every frame), and when the throttle last warned about it.
+	unsigned int m_nProcessedUsrcmdsThisVeryTick;
+	float m_flLastUsrcmdsWarningPrintTime;
 #endif
 public:
 	CGameClient(int id, client_t* cl);
@@ -289,6 +294,12 @@ public:
 
 	double GetReconnectDeadline() const { return m_reconnectDeadline; }
 	void SetReconnectDeadline(double time) { m_reconnectDeadline = time; }
+
+	unsigned int GetProcessedUsrcmdsThisTick() const { return m_nProcessedUsrcmdsThisVeryTick; }
+	void CountProcessedUsrcmd() { m_nProcessedUsrcmdsThisVeryTick++; }
+	void ResetProcessedUsrcmds() { m_nProcessedUsrcmdsThisVeryTick = 0; }
+	float GetLastUsrcmdsWarningTime() const { return m_flLastUsrcmdsWarningPrintTime; }
+	void SetLastUsrcmdsWarningTime(float time) { m_flLastUsrcmdsWarningPrintTime = time; }
 #endif
 };
 
