@@ -57,10 +57,12 @@ cvar_t mp_consistency = { "mp_consistency", "1", FCVAR_SERVER, 0.0f, NULL };
 cvar_t sv_voiceenable = { "sv_voiceenable", "1", FCVAR_SERVER | FCVAR_ARCHIVE, 0.0f, NULL };
 
 #ifdef REHLDS_FIXES
+cvar_t sv_rehlds_force_allow_lagcompensation = { "sv_rehlds_force_allow_lagcompensation", "0", FCVAR_SERVER | FCVAR_ARCHIVE, 0.0f, NULL };
+
 // 24 seems to be the best value - no false positives (Been testing for five minutes at 500 and 20 fps)
 // 16 may seem better for security, but it involves false positives sometimes (when the client alt-tabs from the game)
 // still, it prevents fastcrowbar and other burst speedhacks so far.
-cvar_t sv_rehlds_maxusrcmdprocessticks = { "sv_rehlds_maxusrcmdprocessticks", "24", FCVAR_SERVER | FCVAR_ARCHIVE, 0.0f, NULL };
+cvar_t sv_rehlds_maxusrcmdprocessticks = { "sv_rehlds_maxusrcmdprocessticks", "24", FCVAR_SERVER | FCVAR_ARCHIVE, 24.0f, NULL };
 #endif //REHLDS_FIXES
 
 clc_func_t sv_clcfuncs[] = {
@@ -1202,7 +1204,11 @@ entity_state_t *SV_FindEntInPack(int index, packet_entities_t *pack)
 // The game module and the client allow positions to be rewound for this command
 bool SV_IsLagCompensationActive(client_t *client)
 {
-	if (!gEntityInterface.pfnAllowLagCompensation())
+	if (!gEntityInterface.pfnAllowLagCompensation()
+#ifdef REHLDS_FIXES
+		&& sv_rehlds_force_allow_lagcompensation.value == 0.0f
+#endif //REHLDS_FIXES
+		)
 		return false;
 
 	if (!sv_unlag.value || g_psvs.maxclients <= 1)
