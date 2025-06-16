@@ -267,7 +267,7 @@ cvar_t sv_use_entity_file = { "sv_use_entity_file", "0", 0, 0.0f, nullptr };
 cvar_t sv_usercmd_custom_random_seed = { "sv_usercmd_custom_random_seed", "0", 0, 0.0f, nullptr };
 cvar_t sv_rehlds_allow_large_sprays = { "sv_rehlds_allow_large_sprays", "1", 0, 1.0f, nullptr };
 #ifdef REHLDS_SVEN
-cvar_t sv_rehlds_sven_block_game_bans = { "sv_rehlds_sven_block_game_bans", "1", 0, 1.0f, nullptr };
+cvar_t sv_rehlds_sven_block_game_bans = { "sv_rehlds_sven_block_game_bans", "1", FCVAR_SERVER | FCVAR_ARCHIVE, 1.0f, nullptr };
 GameBanDelayedCommand_t* g_pGameBanDelayedCommandHead;
 GameBanDelayedCommand_t* g_pGameBanDelayedCommandTail;
 #endif // REHLDS_SVEN
@@ -8611,6 +8611,7 @@ void SV_Init(void)
 	Cvar_RegisterVariable(&sv_rehlds_send_mapcycle);
 	Cvar_RegisterVariable(&sv_rehlds_maxclients_from_single_ip);
 	Cvar_RegisterVariable(&sv_rehlds_maxusrcmdprocessticks);
+	Cvar_RegisterVariable(&sv_rehlds_force_allow_lagcompensation);
 
 #ifdef REHLDS_SVEN
 	Cvar_RegisterVariable(&sv_rehlds_sven_block_game_bans);
