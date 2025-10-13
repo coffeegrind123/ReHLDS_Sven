@@ -125,7 +125,9 @@ bool SV_ReadModelBoundsResponse(const resource_t *r)
 	// Requirement is stored scrambled
 	unsigned char required[sizeof(r->rguc_reserved)];
 	Q_memcpy(required, r->rguc_reserved, sizeof(required));
-	//COM_UnMunge(required, sizeof(required), g_psvs.spawncount);
+#ifndef REHLDS_SVEN
+	COM_UnMunge(required, sizeof(required), g_psvs.spawncount);
+#endif //!REHLDS_SVEN
 
 	vec3_t mins;
 	vec3_t maxs;
@@ -166,7 +168,9 @@ void SV_ParseConsistencyResponse(client_t *pSenderClient)
 		return;
 	}
 
-	//COM_UnMunge(&net_message.data[msg_readcount], length, g_psvs.spawncount);
+#ifndef REHLDS_SVEN
+	COM_UnMunge(&net_message.data[msg_readcount], length, g_psvs.spawncount);
+#endif //!REHLDS_SVEN
 	MSG_StartBitReading(&net_message);
 
 	resource_t *resources = SV_GetResourceList();
@@ -393,7 +397,11 @@ void SV_SendConsistencyList(sizebuf_t *msg)
 		if (delta > 31)
 		{
 			MSG_WriteBits(0, 1);
-			MSG_WriteBits(i, 16);	// LIMIT: Here it write index, not a diff, with resolution of 10 bits. So, it limits not adjacent index to 1023 max.
+#ifdef REHLDS_SVEN
+			MSG_WriteBits(i, 16);
+#else //!REHLDS_SVEN
+			MSG_WriteBits(i, 10);	// LIMIT: Here it write index, not a diff, with resolution of 10 bits. So, it limits not adjacent index to 1023 max.
+#endif //REHLDS_SVEN
 		}
 		else
 		{
@@ -953,7 +961,7 @@ void SV_RunCmd(usercmd_t* ucmd, int random_seed, qboolean fNetCmd, qboolean fCho
 		{
 			if (gameClient->GetLastUsrcmdsWarningTime() + 1.0f < realtime)
 			{
-				Con_Printf("%s: client \"%s\" is going over sv_rehlds_maxusrcmdprocessticks!\n", __func__, host_client->name);
+				Con_DPrintf("%s: client \"%s\" is going over sv_rehlds_maxusrcmdprocessticks!\n", __func__, host_client->name);
 				gameClient->SetLastUsrcmdsWarningTime(realtime);
 			}
 
@@ -1502,12 +1510,19 @@ void SV_ParseStringCommand(client_t *pSenderClient)
 	gEntityInterface.pfnClientCommand(sv_player);
 }
 
+#ifdef REHLDS_SVEN
 void SV_ParseDelta(client_t *pSenderClient)
 {
 	MSG_StartBitReading(&net_message);
 	host_client->delta_sequence = MSG_ReadBits(16);
 	MSG_EndBitReading(&net_message);
 }
+#else //!REHLDS_SVEN
+void SV_ParseDelta(client_t* pSenderClient)
+{
+	host_client->delta_sequence = MSG_ReadByte();
+}
+#endif //REHLDS_SVEN
 
 void EXT_FUNC SV_EstablishTimeBase_mod(IGameClient *cl, usercmd_t *cmds, int dropped, int numbackup, int numcmds)
 {
@@ -1523,6 +1538,7 @@ void SV_EstablishTimeBase(client_t *cl, usercmd_t *cmds, int dropped, int numbac
 const int MAX_DROPPED_CMDS = 24;
 
 // Server time the first command of the message starts at: the end of the message minus the duration of all its commands
+// TODO: This is different for sven
 void SV_EstablishTimeBase_internal(client_t *cl, usercmd_t *cmds, int dropped, int numbackup, int numcmds)
 {
 	double runcmd_time = 0.0;
@@ -1612,6 +1628,18 @@ void SV_ParseMove(client_t *pSenderClient)
 	int mlen = MSG_ReadByte();
 	byte cbchecksum = MSG_ReadByte();
 
+#ifndef REHLDS_SVEN // this check doesn't exist in sven at all
+	if (mlen <= 0 || !SZ_HasSpaceToRead(&net_message, mlen))
+	{
+		msg_badread = TRUE;
+		Con_DPrintf("%s:  %s:%s invalid length: %d\n", __func__, host_client->name, NET_AdrToString(host_client->netchan.remote_address), mlen);
+		SV_DropClient(host_client, FALSE, "Invalid length");
+		return;
+	}
+
+	COM_UnMunge(&net_message.data[placeholder + 1], mlen, host_client->netchan.incoming_sequence);
+#endif //!REHLDS_SVEN
+
 	unsigned int packetLossByte = MSG_ReadByte();
 	int numbackup = MSG_ReadByte();
 	int numcmds = MSG_ReadByte();
@@ -1649,6 +1677,18 @@ void SV_ParseMove(client_t *pSenderClient)
 		Con_Printf("Client %s:%s sent a bogus command packet\n", host_client->name, NET_AdrToString(host_client->netchan.remote_address));
 		return;
 	}
+
+#ifndef REHLDS_SVEN
+	byte cbpktchecksum = COM_BlockSequenceCRCByte(&net_message.data[placeholder + 1], msg_readcount - placeholder - 1, host_client->netchan.incoming_sequence);
+	if (cbpktchecksum != cbchecksum)
+	{
+		Con_DPrintf("Failed command checksum for %s:%s\n", host_client->name, NET_AdrToString(host_client->netchan.remote_address));
+		msg_badread = TRUE;
+		return;
+	}
+#else //REHLDS_SVEN
+	(void)cbchecksum; // Sven sends no checksum to compare it against
+#endif //!REHLDS_SVEN
 
 	host_client->packet_loss = packet_loss;
 
