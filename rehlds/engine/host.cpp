@@ -162,6 +162,9 @@ void Host_InitLocal(void)
 	Cvar_RegisterVariable(&host_profile);
 	Cvar_RegisterVariable(&mp_logfile);
 	Cvar_RegisterVariable(&mp_logecho);
+#ifdef REHLDS_SVEN
+	Cvar_RegisterVariable(&sv_log_daily);
+#endif
 	Cvar_RegisterVariable(&sv_log_onefile);
 	Cvar_RegisterVariable(&sv_log_singleplayer);
 	Cvar_RegisterVariable(&sv_logsecret);
