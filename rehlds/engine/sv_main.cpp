@@ -230,6 +230,9 @@ cvar_t sv_send_logos = { "sv_send_logos", "1", 0, 0.0f, NULL };
 cvar_t sv_send_resources = { "sv_send_resources", "1", 0, 0.0f, NULL };
 cvar_t sv_log_singleplayer = { "sv_log_singleplayer", "0", 0, 0.0f, NULL };
 cvar_t sv_logsecret = { "sv_logsecret", "0", 0, 0.0f, NULL };
+#ifdef REHLDS_SVEN
+cvar_t sv_log_daily = { "sv_log_daily", "1", 0, 0.0f, NULL };
+#endif
 cvar_t sv_log_onefile = { "sv_log_onefile", "0", 0, 0.0f, NULL };
 cvar_t sv_logbans = { "sv_logbans", "0", 0, 0.0f, NULL };
 cvar_t sv_allow_upload = { "sv_allowupload", "1", FCVAR_SERVER, 0.0f, NULL };
