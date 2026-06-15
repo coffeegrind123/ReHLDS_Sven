@@ -124,7 +124,49 @@ void Log_Open(void)
 	FileHandle_t fp;
 	char *temp;
 
-	if (!g_psvs.log.active || (sv_log_onefile.value != 0.0f && g_psvs.log.file))
+	if (!g_psvs.log.active)
+		return;
+
+#ifdef REHLDS_SVEN
+    if (sv_log_daily.value != 0.0f)
+    {
+        if (mp_logfile.value == 0.0f)
+            Con_Printf("Server logging data to console.\n");
+        else
+        {
+            Log_Close();
+            time(&ltime);
+            today = localtime(&ltime);
+
+            temp = Cvar_VariableString("logsdir");
+
+            if (!temp || Q_strlen(temp) <= 0 || Q_strstr(temp, ":") || Q_strstr(temp, ".."))
+                Q_snprintf(szFileBase, sizeof(szFileBase), "logs/%04i-%02i-%02i.log", today->tm_year + 1900, today->tm_mon + 1, today->tm_mday);
+            else
+                Q_snprintf(szFileBase, sizeof(szFileBase), "%s/%04i-%02i-%02i.log", temp, today->tm_year + 1900, today->tm_mon + 1, today->tm_mday);
+
+            COM_FixSlashes(szFileBase);
+            COM_CreatePath(szFileBase);
+
+            fp = FS_OpenPathID(szFileBase, "a", "GAMECONFIG");
+            if (fp)
+            {
+                g_psvs.log.file = (void *)fp;
+                Con_Printf("Server logging data to file %s\n", szFileBase);
+                Log_Printf("Log file started (file \"%s\") (game \"%s\") (version \"%i/%s/%d\")\n", szFileBase, Info_ValueForKey(Info_Serverinfo(), "*gamedir"), PROTOCOL_VERSION, gpszVersionString, build_number());
+            }
+            else
+            {
+                Con_Printf("Unable to open logfile %s\nLogging disabled\n", szFileBase);
+                g_psvs.log.active = FALSE;
+            }
+        }
+
+        return;
+    }
+#endif
+
+	if (sv_log_onefile.value != 0.0f && g_psvs.log.file)
 		return;
 
 	if (mp_logfile.value == 0.0f)

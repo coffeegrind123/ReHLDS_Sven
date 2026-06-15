@@ -365,6 +365,9 @@ extern cvar_t sv_send_logos;
 extern cvar_t sv_send_resources;
 extern cvar_t sv_log_singleplayer;
 extern cvar_t sv_logsecret;
+#ifdef REHLDS_SVEN
+extern cvar_t sv_log_daily;
+#endif
 extern cvar_t sv_log_onefile;
 extern cvar_t sv_logbans;
 extern cvar_t sv_allow_upload;
