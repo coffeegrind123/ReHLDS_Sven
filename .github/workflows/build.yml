@@ -24,6 +24,9 @@ jobs:
       buildRelease: 'Release'
       buildReleasePlay: 'Release Play'
       buildTest: 'Test Fixes'
+      # `secrets` is not a valid context in a step-level `if`, so resolve it here where it
+      # is allowed and test the resulting env var instead.
+      hasSigningCert: ${{ secrets.KEY_PFX_B64 != '' }}
 
     steps:
       - name: Configure
@@ -100,7 +103,7 @@ jobs:
         run: |
           mkdir publish\debug
           mkdir publish\tests
-          mkdir publish\bin\win32\valve\dlls
+          mkdir publish\bin\win32\svencoop\dlls
           move "msvc\${{ env.buildReleasePlay }}\swds.dll" publish\tests\swds.dll
           
           move msvc\${{ env.buildRelease }}\hlds.exe publish\bin\win32\hlds.exe
@@ -110,7 +113,9 @@ jobs:
           move msvc\${{ env.buildRelease }}\proxy.dll publish\bin\win32\proxy.dll
           move msvc\${{ env.buildRelease }}\demoplayer.dll publish\bin\win32\demoplayer.dll
           move msvc\${{ env.buildRelease }}\filesystem_stdio.dll publish\bin\win32\filesystem_stdio.dll
-          move msvc\${{ env.buildRelease }}\director.dll publish\bin\win32\valve\dlls\director.dll
+          move msvc\${{ env.buildRelease }}\director.dll publish\bin\win32\svencoop\dlls\director.dll
+          # swds.dll is linked against THIS steam_api.dll; ship it so a release is usable alone.
+          copy rehlds\lib\steam_api.dll publish\bin\win32\steam_api.dll
           move msvc\${{ env.buildRelease }}\hlds.pdb publish\debug\hlds.pdb
           move msvc\${{ env.buildRelease }}\hltv.pdb publish\debug\hltv.pdb
           move msvc\${{ env.buildRelease }}\swds.pdb publish\debug\swds.pdb
@@ -155,11 +160,12 @@ jobs:
          rcedit ${{ github.workspace }}\publish\bin\win32\proxy.dll --set-version-string ProductName "proxy.dll" --set-file-version "${{ steps.get_version.outputs.version }}" --set-product-version "${{ steps.get_version.outputs.version }}" --set-version-string FileDescription "A dll for proxying network connections, Commit: $env:GITHUB_SHA" --set-version-string "Comments" "Commit: $env:GITHUB_SHA" --set-version-string CompanyName "ReHLDS Dev Team" --set-version-string LegalCopyright "Copyright 2025 Valve, ReHLDS DevTeam" --set-icon rehlds/dedicated/msvc/icon.ico
          rcedit ${{ github.workspace }}\publish\bin\win32\demoplayer.dll --set-version-string ProductName "demoplayer.dll" --set-file-version "${{ steps.get_version.outputs.version }}" --set-product-version "${{ steps.get_version.outputs.version }}" --set-version-string FileDescription "A dll for demoplayer functionality, Commit: $env:GITHUB_SHA" --set-version-string "Comments" "Commit: $env:GITHUB_SHA" --set-version-string CompanyName "ReHLDS Dev Team" --set-version-string LegalCopyright "Copyright 2025 Valve, ReHLDS DevTeam" --set-icon rehlds/dedicated/msvc/icon.ico
          rcedit ${{ github.workspace }}\publish\bin\win32\filesystem_stdio.dll --set-version-string ProductName "filesystem_stdio.dll" --set-file-version "${{ steps.get_version.outputs.version }}" --set-product-version "${{ steps.get_version.outputs.version }}" --set-version-string FileDescription "A dll that manages file input/output operations, Commit: $env:GITHUB_SHA" --set-version-string "Comments" "Commit: $env:GITHUB_SHA" --set-version-string CompanyName "ReHLDS Dev Team" --set-version-string LegalCopyright "Copyright 2025 Valve, ReHLDS DevTeam" --set-icon rehlds/dedicated/msvc/icon.ico
-         rcedit ${{ github.workspace }}\publish\bin\win32\valve\dlls\director.dll --set-version-string ProductName "director.dll" --set-file-version "${{ steps.get_version.outputs.version }}" --set-product-version "${{ steps.get_version.outputs.version }}" --set-version-string FileDescription "A dll used for Director functionality in Half-Life 1, Commit: $env:GITHUB_SHA" --set-version-string "Comments" "Commit: $env:GITHUB_SHA" --set-version-string CompanyName "ReHLDS Dev Team" --set-version-string LegalCopyright "Copyright 2025 Valve, ReHLDS DevTeam" --set-icon rehlds/dedicated/msvc/icon.ico
+         rcedit ${{ github.workspace }}\publish\bin\win32\svencoop\dlls\director.dll --set-version-string ProductName "director.dll" --set-file-version "${{ steps.get_version.outputs.version }}" --set-product-version "${{ steps.get_version.outputs.version }}" --set-version-string FileDescription "A dll used for Director functionality in Half-Life 1, Commit: $env:GITHUB_SHA" --set-version-string "Comments" "Commit: $env:GITHUB_SHA" --set-version-string CompanyName "ReHLDS Dev Team" --set-version-string LegalCopyright "Copyright 2025 Valve, ReHLDS DevTeam" --set-icon rehlds/dedicated/msvc/icon.ico
         shell: "pwsh"
 
       - name: Import PFX and sign
-        if: github.event_name != 'pull_request'
+        # Authenticode cert is an upstream ReHLDS secret; skip when the fork has none.
+        if: github.event_name != 'pull_request' && env.hasSigningCert == 'true'
         env:
           KEY_PFX_PASS: ${{ secrets.KEY_PFX_PASS }}
         # https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md
@@ -176,7 +182,7 @@ jobs:
                & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x86\signtool.exe' sign /a /f "${{ github.workspace }}\signing-cert.pfx"  /p $env:KEY_PFX_PASS /d "ReHLDS - proxy.dll" /du "https://rehlds.dev/" /tr "http://timestamp.digicert.com" /td sha256 /fd sha256 /v ${{ github.workspace }}\publish\bin\win32\proxy.dll
                & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x86\signtool.exe' sign /a /f "${{ github.workspace }}\signing-cert.pfx"  /p $env:KEY_PFX_PASS /d "ReHLDS - demoplayer.dll" /du "https://rehlds.dev/" /tr "http://timestamp.digicert.com" /td sha256 /fd sha256 /v ${{ github.workspace }}\publish\bin\win32\demoplayer.dll
                & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x86\signtool.exe' sign /a /f "${{ github.workspace }}\signing-cert.pfx"  /p $env:KEY_PFX_PASS /d "ReHLDS - filesystem_stdio.dll" /du "https://rehlds.dev/" /tr "http://timestamp.digicert.com" /td sha256 /fd sha256 /v ${{ github.workspace }}\publish\bin\win32\filesystem_stdio.dll
-               & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x86\signtool.exe' sign /a /f "${{ github.workspace }}\signing-cert.pfx"  /p $env:KEY_PFX_PASS /d "ReHLDS - director.dll" /du "https://rehlds.dev/" /tr "http://timestamp.digicert.com" /td sha256 /fd sha256 /v ${{ github.workspace }}\publish\bin\win32\valve\dlls\director.dll
+               & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x86\signtool.exe' sign /a /f "${{ github.workspace }}\signing-cert.pfx"  /p $env:KEY_PFX_PASS /d "ReHLDS - director.dll" /du "https://rehlds.dev/" /tr "http://timestamp.digicert.com" /td sha256 /fd sha256 /v ${{ github.workspace }}\publish\bin\win32\svencoop\dlls\director.dll
                Remove-Item -Recurse -Force "${{ github.workspace }}\signing-cert.pfx"
         shell: "pwsh"
 
@@ -191,6 +197,13 @@ jobs:
     runs-on: ubuntu-24.04
     container: rehldsorg/testdemos:latest
     needs: [windows]
+    # Disabled for ReHLDS_Sven. These are recorded stock Half-Life/CS demos replayed against
+    # the rehldsorg/testdemos image, which ships 'valve' and 'cstrike' gamedirs. A REHLDS_SVEN
+    # build hardcodes the 'svencoop' basedir and changes the wire format (short-length user
+    # messages, long-encoded coords, 4-bit delta byte counts, raised qlimits), so these demos
+    # cannot replay correctly by construction -- this is not a regression to chase.
+    # Re-enable once Sven Co-op demos exist to replay against.
+    if: false
     defaults:
       run:
         shell: bash
@@ -228,6 +241,11 @@ jobs:
     name: 'Linux'
     runs-on: ubuntu-24.04
     container: debian:11-slim
+
+    env:
+      # `secrets` is not a valid context in a step-level `if`, so resolve it here where it
+      # is allowed and test the resulting env var instead.
+      hasGpgKey: ${{ secrets.KEY_ASC != '' }}
 
     steps:
       - name: Install dependencies
@@ -290,7 +308,9 @@ jobs:
           #export for global use
           echo "GPG_LINUX_FINGERPRINT=$GPG_LINUX_FINGERPRINT" >> $GITHUB_ENV
         shell: bash
-        if: github.event_name != 'pull_request'
+        # The signing keys are upstream ReHLDS secrets. This fork does not carry them, and
+        # the step exits non-zero on an empty key, so skip it unless they are configured.
+        if: github.event_name != 'pull_request' && env.hasGpgKey == 'true'
 
       - name: Build and Run unittests
         run: |
@@ -331,7 +351,7 @@ jobs:
 
       - name: Move files
         run: |
-          mkdir -p publish/bin/linux32/valve/dlls		  
+          mkdir -p publish/bin/linux32/svencoop/dlls		  
           
           mv build/rehlds/engine_i486.so publish/bin/linux32/engine_i486.so
           mv rehlds/version/appversion.h publish/appversion.h
@@ -340,8 +360,14 @@ jobs:
           mv build/rehlds/HLTV/Core/core.so publish/bin/linux32/core.so
           mv build/rehlds/HLTV/Proxy/proxy.so publish/bin/linux32/proxy.so
           mv build/rehlds/HLTV/DemoPlayer/demoplayer.so publish/bin/linux32/demoplayer.so
-          mv build/rehlds/HLTV/Director/director.so publish/bin/linux32/valve/dlls/director.so
+          mv build/rehlds/HLTV/Director/director.so publish/bin/linux32/svencoop/dlls/director.so
           mv build/rehlds/filesystem/FileSystem_Stdio/filesystem_stdio.so publish/bin/linux32/filesystem_stdio.so
+          # engine_i486.so is linked against THIS libsteam_api.so and needs its
+          # SteamInternal_SteamAPI_Init, which retail Sven's copy does not export --
+          # without it a deployment dies at "undefined symbol: SteamInternal_SteamAPI_Init
+          # / Unable to load engine, image is corrupt." Ship it so a release is usable
+          # on its own.
+          cp rehlds/lib/linux32/libsteam_api.so publish/bin/linux32/libsteam_api.so
 
       - name: Run GLIBC/ABI version compat test
         run: |
@@ -352,7 +378,7 @@ jobs:
             "publish/bin/linux32/core.so"
             "publish/bin/linux32/proxy.so"
             "publish/bin/linux32/demoplayer.so"
-            "publish/bin/linux32/valve/dlls/director.so"
+            "publish/bin/linux32/svencoop/dlls/director.so"
             "publish/bin/linux32/filesystem_stdio.so"
           )
           bash ./rehlds/version/glibc_test.sh ${binaries[@]}
@@ -371,9 +397,23 @@ jobs:
   publish:
     name: 'Publish'
     runs-on: ubuntu-24.04
-    needs: [windows, testdemos, linux]
+    # testdemos is disabled for this fork (see above); a skipped job never satisfies `needs`,
+    # so it is dropped here rather than silently gating every publish.
+    needs: [windows, linux]
+
+    # Attaching assets to a release needs write access to contents. This repository's
+    # default workflow permission is read-only, so request it explicitly here rather
+    # than loosening the default for every job.
+    permissions:
+      contents: write
 
     steps:
+      # Must come FIRST: actions/checkout cleans the workspace, so running it after the
+      # downloads would delete the artifacts. Needed so the bundling step can check the
+      # salt sentinel it writes still matches the engine's REUNION_SALT_SENTINEL.
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Deploying linux artifacts
         uses: actions/download-artifact@v4
         with:
@@ -398,26 +438,182 @@ jobs:
           fi
           rm -f appversion.h
 
+      - name: Bundle Metamod-R and ReUnion into gamedir/
+        env:
+          # Pinned, not "latest", so a release is reproducible and we only ever ship
+          # plugin versions this stack has actually been run against. Bump deliberately.
+          METAMOD_VERSION: '1.3.0.149'
+          REUNION_VERSION: '0.2.0.25'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          rm -rf _plug gamedir && mkdir -p _plug gamedir/addons/metamod gamedir/addons/reunion
+
+          gh release download "$METAMOD_VERSION" --repo rehlds/Metamod-R --pattern '*.zip' -O _plug/mm.zip
+          gh release download "$REUNION_VERSION" --repo rehlds/reunion    --pattern '*.zip' -O _plug/ru.zip
+          unzip -q _plug/mm.zip -d _plug/mm
+          unzip -q _plug/ru.zip -d _plug/ru
+
+          # Metamod-R ships an addons/metamod/ tree already in the right shape.
+          cp _plug/mm/addons/metamod/metamod_i386.so gamedir/addons/metamod/
+          cp _plug/mm/addons/metamod/metamod.dll     gamedir/addons/metamod/
+          # ReUnion ships flat bin/<platform>/ instead.
+          cp _plug/ru/bin/Linux/reunion_mm_i386.so   gamedir/addons/reunion/
+          cp _plug/ru/bin/Windows/reunion_mm.dll     gamedir/addons/reunion/
+
+          # Metamod must be told the REAL game library: liblist.gam points at Metamod,
+          # so without this it would recurse into itself.
+          # gamedll_linux is the REAL game library; liblist.gam points at Metamod itself,
+          # so without this line Metamod would recurse into itself.
+          #
+          # ⚠ DO NOT add a bare `gamedll` line here. Metamod-r applies it over
+          # gamedll_linux on Linux too, so the server then tries to load the WINDOWS
+          # dlls\server.dll and dies with "FATAL ERROR (shutting down): Failure to load
+          # game DLL" -- printed AFTER Metamod's full banner, so it reads as a Metamod
+          # fault and is not. Measured 2026-08-17: adding the line broke a tree that was
+          # otherwise byte-identical to a working one, and removing it fixed it.
+          # Windows deployments should uncomment the line below instead.
+          cat > gamedir/addons/metamod/config.ini <<'EOF'
+          // Metamod-R config. gamedll_linux is the REAL game library; liblist.gam points
+          // at Metamod itself, so without this line Metamod would recurse into itself.
+          //
+          // Windows: uncomment the next line. Do NOT leave it uncommented on Linux --
+          // it overrides gamedll_linux and the server fails to load the game DLL.
+          //gamedll dlls\server.dll
+          gamedll_linux dlls/server.so
+          EOF
+
+          # ReUnion MUST load first: it intercepts the connect/auth path, so anything
+          # loaded before it would see clients it would have rejected.
+          cat > gamedir/addons/metamod/plugins.ini <<'EOF'
+          ; Metamod-R plugin list. ReUnion MUST be first -- it intercepts the connect/auth
+          ; path, so anything loaded before it can see clients it would have rejected.
+          linux addons/reunion/reunion_mm_i386.so
+          win32 addons\reunion\reunion_mm.dll
+          EOF
+
+          # Start from ReUnion's OWN shipped config so this tracks whatever version is
+          # pinned above, and change only the AUTHID policy.
+          #
+          # cid_* == 5 means DROP THE CLIENT. Upstream ships cid_NoSteam47/48 = 5, i.e.
+          # plain non-Steam clients are rejected by default -- the exact opposite of why
+          # anyone deploys ReUnion. 3 = accept and assign a generated STEAM_x:y:z.
+          sed -e 's/^cid_NoSteam47 = 5/cid_NoSteam47 = 3/' \
+              -e 's/^cid_NoSteam48 = 5/cid_NoSteam48 = 3/' \
+              _plug/ru/reunion.cfg > gamedir/reunion.cfg
+
+          # SteamIdHashSalt is NOT optional: with AuthVersion = 3 an empty salt makes
+          # ReUnion fail to init, and it fails almost silently -- Metamod still reports
+          # "Read plugin config for: Reunion" and the server boots and plays normally.
+          # Only `meta list` shows the truth.
+          #
+          # But a salt baked into a public release is not a secret either -- everyone who
+          # downloaded it has the same value. So ship a SENTINEL and let the engine mint a
+          # real one per deployment on first run (Sven_LocalizeReunionSalt, sys_dll.cpp),
+          # writing it to <gamedir>/.reunion_salt so later upgrades restore rather than
+          # rotate it.
+          sed -i "s|^SteamIdHashSalt =.*|SteamIdHashSalt = GENERATE_ON_FIRST_RUN|" gamedir/reunion.cfg
+
+          printf '%s\n' \
+            ';; ================================================================' \
+            ';; SteamIdHashSalt below is a PLACEHOLDER, not a usable value.' \
+            ';;' \
+            ';; ReHLDS_Sven replaces it with a salt generated from the OS CSPRNG the' \
+            ';; first time the server starts, and saves a copy to .reunion_salt in this' \
+            ';; directory. Nothing to do by hand.' \
+            ';;' \
+            ';; !! KEEP .reunion_salt. It is what lets a later release be unpacked over' \
+            ';; !! this install without minting a NEW salt -- and a new salt changes every' \
+            ';; !! generated STEAM_x:y:z, which invalidates every ban and every stored' \
+            ';; !! per-player record.' \
+            ';;' \
+            ';; Setting a real value here by hand disables all of the above; the engine' \
+            ';; never touches a salt it did not place. rotate-reunion-salt.sh forces a new' \
+            ';; one, with the same consequences as above.' \
+            ';; ================================================================' \
+            '' > gamedir/.cfghdr
+          cat gamedir/.cfghdr gamedir/reunion.cfg > gamedir/reunion.cfg.new
+          mv gamedir/reunion.cfg.new gamedir/reunion.cfg
+          rm -f gamedir/.cfghdr
+
+          cat > gamedir/rotate-reunion-salt.sh <<'EOF'
+          #!/bin/sh
+          # Rotate the ReUnion SteamIdHashSalt. Run once per deployment, then leave alone:
+          # rotating invalidates every generated SteamID (bans, per-player records).
+          set -eu
+          CFG="${1:-$(dirname "$0")/reunion.cfg}"
+          [ -f "$CFG" ] || { echo "no such config: $CFG" >&2; exit 1; }
+          SALT=$(head -c 48 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-48)
+          sed -i "s|^SteamIdHashSalt =.*|SteamIdHashSalt = $SALT|" "$CFG"
+          grep -qE "^SteamIdHashSalt = .{32,}" "$CFG" || { echo "FAILED to write salt" >&2; exit 1; }
+          echo "rotated SteamIdHashSalt in $CFG (${#SALT} chars)"
+          EOF
+          chmod +x gamedir/rotate-reunion-salt.sh
+
+          # Guard the result rather than trusting the staging above.
+          test -s gamedir/addons/metamod/metamod_i386.so
+          test -s gamedir/addons/metamod/metamod.dll
+          test -s gamedir/addons/reunion/reunion_mm_i386.so
+          test -s gamedir/addons/reunion/reunion_mm.dll
+          grep -qE '^cid_NoSteam47 = 3' gamedir/reunion.cfg || { echo "FATAL: cid_NoSteam47 not 3 (5 = DROP)" >&2; exit 1; }
+          grep -qE '^cid_NoSteam48 = 3' gamedir/reunion.cfg || { echo "FATAL: cid_NoSteam48 not 3 (5 = DROP)" >&2; exit 1; }
+          grep -qE '^SteamIdHashSalt = GENERATE_ON_FIRST_RUN$' gamedir/reunion.cfg || { echo "FATAL: salt sentinel not written; the engine would not localise it and ReUnion would fail to init" >&2; exit 1; }
+          grep -q 'GENERATE_ON_FIRST_RUN' rehlds/engine/sys_dll.cpp || { echo "FATAL: sentinel does not match the engine's REUNION_SALT_SENTINEL" >&2; exit 1; }
+          echo "--- gamedir/ ---"; find gamedir -type f | sort
+          rm -rf _plug
+
+      # GPG signing is opt-in on the secrets actually being present.
+      #
+      # Upstream gated this on the event type alone, which is wrong for a fork: PUB_ASC /
+      # KEY_ASC / PUB_ASC_FILE / KEY_ASC_FILE are upstream ReHLDS secrets this repository
+      # does not have, so `echo "$PUB_ASC" > "$PUB_ASC_FILE"` became a redirect to the empty
+      # filename, which under the default `bash -e` killed the whole packaging step -- and
+      # with it the upload, since the release step needs packaging-job to have succeeded.
+      # Every release-triggered build failed that way and only a manual workflow_dispatch
+      # (event_name != release, so SIGN_READY=false) ever produced assets.
+      #
+      # Secrets are not usable in a step-level `if:`, so they come in through `env:` and are
+      # tested here for non-emptiness. All four present -> sign; any missing -> ship unsigned
+      # rather than fail the release.
       - name: Set SIGN_READY env
+        env:
+          PUB_ASC: ${{ secrets.PUB_ASC }}
+          KEY_ASC: ${{ secrets.KEY_ASC }}
+          PUB_ASC_FILE: ${{ secrets.PUB_ASC_FILE }}
+          KEY_ASC_FILE: ${{ secrets.KEY_ASC_FILE }}
         run: |
           if [[ "${{ github.event_name }}" == "release" && \
                 "${{ github.event.action }}" == "published" && \
                 "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "SIGN_READY=true" >> $GITHUB_ENV
+            if [[ -n "$PUB_ASC" && -n "$KEY_ASC" && -n "$PUB_ASC_FILE" && -n "$KEY_ASC_FILE" ]]; then
+              echo "SIGN_READY=true" >> $GITHUB_ENV
+            else
+              echo "::notice::GPG signing secrets not configured; publishing unsigned archives."
+              echo "SIGN_READY=false" >> $GITHUB_ENV
+            fi
           else
            echo "SIGN_READY=false" >> $GITHUB_ENV
           fi
 
       - name: Final signing and Packaging bin/dbg
         id: packaging-job
+        env:
+          # Through env, not inline ${{ }} interpolation: an unset secret then reaches the
+          # script as an empty variable that can be tested, instead of being spliced into
+          # the command line as an empty word. SIGN_READY already guarantees all four are
+          # non-empty when this branch runs.
+          PUB_ASC: ${{ secrets.PUB_ASC }}
+          KEY_ASC: ${{ secrets.KEY_ASC }}
+          PUB_ASC_FILE: ${{ secrets.PUB_ASC_FILE }}
+          KEY_ASC_FILE: ${{ secrets.KEY_ASC_FILE }}
         run: |
           if [[ "$SIGN_READY" == "true" ]]; then
             echo "Signing avalible."
 
-            echo "${{ secrets.PUB_ASC }}" > "${{ secrets.PUB_ASC_FILE }}"
-            echo "${{ secrets.KEY_ASC }}" > "${{ secrets.KEY_ASC_FILE }}"
-            gpg --batch --yes --import "${{ secrets.PUB_ASC_FILE }}"
-            gpg --batch --yes --import "${{ secrets.KEY_ASC_FILE }}"
+            echo "$PUB_ASC" > "$PUB_ASC_FILE"
+            echo "$KEY_ASC" > "$KEY_ASC_FILE"
+            gpg --batch --yes --import "$PUB_ASC_FILE"
+            gpg --batch --yes --import "$KEY_ASC_FILE"
             GPG_LINUX_FINGERPRINT=$(gpg --list-keys --with-colons | grep '^fpr' | head -n 1 | cut -d: -f10)
             echo "$GPG_LINUX_FINGERPRINT:6:" | gpg --batch --import-ownertrust
             echo "GPG_LINUX_FINGERPRINT=$GPG_LINUX_FINGERPRINT" >> $GITHUB_ENV
@@ -440,35 +636,48 @@ jobs:
           }
 
           # Pack and try sign final archive
-          7z a -tzip rehlds-bin-${{ env.APP_VERSION }}.zip bin/ hlsdk/
-          sign_file "rehlds-bin-${{ env.APP_VERSION }}.zip"
+          7z a -tzip rehlds-sven-bin-${{ env.APP_VERSION }}.zip bin/ hlsdk/ gamedir/
+          sign_file "rehlds-sven-bin-${{ env.APP_VERSION }}.zip"
 
           # Pack and try sign final archive
-          7z a -t7z -m0=lzma2 -mx=9 -mfb=64 -aoa rehlds-dbg-${{ env.APP_VERSION }}.7z debug/
-          sign_file "rehlds-dbg-${{ env.APP_VERSION }}.7z"
+          7z a -t7z -m0=lzma2 -mx=9 -mfb=64 -aoa rehlds-sven-dbg-${{ env.APP_VERSION }}.7z debug/
+          sign_file "rehlds-sven-dbg-${{ env.APP_VERSION }}.7z"
 
         shell: bash
 
       - name: Publish artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rehlds-ci-${{ env.APP_VERSION }}
+          name: rehlds-sven-ci-${{ env.APP_VERSION }}
           path: |
             *.zip
             *.7z
             *.asc
 
+      # Attach the archives with `gh` rather than softprops/action-gh-release. That action
+      # PATCHes the release object before uploading, which fails here with
+      # "Resource not accessible by integration ... update-a-release" even though the job
+      # token has Contents: write -- it can add assets but not rewrite a release created by
+      # a user. `gh release upload` only adds assets, which is all that is wanted, and it
+      # drops a third-party action from the release path.
       - name: Release artifacts
-        uses: softprops/action-gh-release@v2
         id: publish-job
         if: |
           startsWith(github.ref, 'refs/tags/') &&
           steps.packaging-job.outcome == 'success'
-        with:
-          files: |
-            *.zip
-            *.7z
-            *.asc
-
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=( *.zip *.7z *.asc )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "FATAL: packaging produced no archives to upload" >&2
+            exit 1
+          fi
+          printf 'uploading: %s\n' "${files[@]}"
+          gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.API_TOKEN }}
+          # API_TOKEN is an upstream ReHLDS secret this fork does not have; an empty token
+          # makes the upload fail. Fall back to the automatic per-run token, which the
+          # job-level `permissions: contents: write` above makes sufficient.
+          GH_TOKEN: ${{ secrets.API_TOKEN || secrets.GITHUB_TOKEN }}

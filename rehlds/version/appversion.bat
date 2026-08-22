@@ -109,7 +109,23 @@ IF NOT %errlvl% == "1" (
 		set branch_name=%%i
 	)
 
-	FOR /F "tokens=*" %%i IN ('"git -C "%repodir%\." rev-list --count !branch_name!"') DO (
+	:: Track the upstream ReHLDS build number rather than our own. The build number is
+	:: a commit count, so counting from our HEAD would report a higher number than the
+	:: upstream release this fork is based on. If rehlds\version\upstream_base names a
+	:: resolvable commit, count from there instead. Otherwise fall back to the branch.
+	set countFrom=!branch_name!
+	IF EXIST "%repodir%\rehlds\version\upstream_base" (
+		FOR /F "usebackq tokens=* delims= " %%u IN (`findstr /V /R /C:"^[ 	]*#" "%repodir%\rehlds\version\upstream_base"`) DO (
+			IF NOT [%%u] == [] (
+				git -C "%repodir%\." rev-parse --verify --quiet "%%u^{commit}" >nul 2>&1
+				IF NOT ERRORLEVEL 1 (
+					set countFrom=%%u
+				)
+			)
+		)
+	)
+
+	FOR /F "tokens=*" %%i IN ('"git -C "%repodir%\." rev-list --count !countFrom!"') DO (
 		IF NOT [%%i] == [] (
 			set commitCount=%%i
 		)

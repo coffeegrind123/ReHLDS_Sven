@@ -872,7 +872,21 @@ int DELTA_ParseDelta(unsigned char *from, unsigned char *to, delta_t *pFields)
 {
 	delta_description_t *pTest;
 	int i;
-	int bits[2];	// this is a limit with 64 fields max in delta
+	// LOCAL PATCH (cs16 / svencoop-server): SECURITY — widen to 128 fields / 16 bytes.
+	//
+	// Upstream declares int bits[2] (8 bytes) with the comment below, but the REHLDS_SVEN
+	// build reads the byte count as 4 bits (nbytes up to 15) and then does an UNCLAMPED
+	// ((byte*)bits)[i] = ... for i < nbytes. Stock ReHLDS reads 3 bits (max 7) so it fits;
+	// the Sven widening turned a safe loop into a stack overflow of up to 7 bytes.
+	//
+	// Reachable from an UNTRUSTED client: clc_move -> SV_ParseMove (sv_user.cpp:1613)
+	// -> MSG_ReadUsercmd (:1674) -> DELTA_ParseDelta (common.cpp:1153). Any client that can
+	// connect can drive it.
+	//
+	// Also a correctness fix: the field loop below indexes bits[i > 31], i.e. only two
+	// ints, so with DELTA_MAX_FIELDS raised to 128 fields 64..127 could never be decoded.
+	int bits[4];	// 128 fields; upstream comment kept below for provenance
+			// (was: int bits[2] — "this is a limit with 64 fields max in delta")
 	int nbytes;
 	int bitfieldnumber;
 	int fieldCount = pFields->fieldCount;
@@ -887,13 +901,16 @@ int DELTA_ParseDelta(unsigned char *from, unsigned char *to, delta_t *pFields)
 	int startbit;
 
 	startbit = MSG_CurrentBit();
-	Q_memset(bits, 0, 8);
+	Q_memset(bits, 0, sizeof(bits));
 
 #ifdef REHLDS_SVEN
 	nbytes = MSG_ReadBits(4);
 #else //!REHLDS_SVEN
 	nbytes = MSG_ReadBits(3);
 #endif //REHLDS_SVEN
+	// nbytes comes straight off the wire; never trust it to fit the buffer.
+	if (nbytes > (int)sizeof(bits))
+		nbytes = (int)sizeof(bits);
 	for (i = 0; i < nbytes; i++)
 	{
 		((byte*)bits)[i] = MSG_ReadBits(8);
