@@ -415,6 +415,7 @@ typedef struct GameBanDelayedCommand_s {
 	struct GameBanDelayedCommand_s* m_pPrev;
 } GameBanDelayedCommand_t;
 extern cvar_t sv_rehlds_sven_block_game_bans;
+extern cvar_t sv_rehlds_sven_tolerate_steam_deny;
 extern GameBanDelayedCommand_t* g_pGameBanDelayedCommandHead;
 extern GameBanDelayedCommand_t* g_pGameBanDelayedCommandTail;
 #endif // REHLDS_SVEN

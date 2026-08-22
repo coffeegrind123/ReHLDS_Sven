@@ -1,26 +1,40 @@
-# ReHLDS [![C/C++ CI](https://github.com/rehlds/ReHLDS/actions/workflows/build.yml/badge.svg)](https://github.com/rehlds/ReHLDS/actions/workflows/build.yml) [![GitHub release (by tag)](https://img.shields.io/github/downloads/rehlds/ReHLDS/latest/total)](https://github.com/rehlds/ReHLDS/releases/latest) ![GitHub all releases](https://img.shields.io/github/downloads/rehlds/ReHLDS/total) [![Percentage of issues still open](http://isitmaintained.com/badge/open/rehlds/ReHLDS.svg)](http://isitmaintained.com/project/rehlds/ReHLDS "Percentage of issues still open") [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://www.gnu.org/licenses/gpl-3.0)  [![CII Best Practices](https://bestpractices.dev/projects/10929/badge)](https://www.bestpractices.dev/en/projects/10929) <img align="right" src="https://user-images.githubusercontent.com/5860435/111066129-040e5e00-84f0-11eb-9e1f-7a7e8611da2b.png" alt="ReHLDS" />
-Reverse-engineered (and bugfixed) HLDS
+# ReHLDS_Sven [![C/C++ CI](https://github.com/coffeegrind123/ReHLDS_Sven/actions/workflows/build.yml/badge.svg)](https://github.com/coffeegrind123/ReHLDS_Sven/actions/workflows/build.yml) [![GitHub release](https://img.shields.io/github/v/release/coffeegrind123/ReHLDS_Sven?sort=semver)](https://github.com/coffeegrind123/ReHLDS_Sven/releases/latest) ![GitHub all releases](https://img.shields.io/github/downloads/coffeegrind123/ReHLDS_Sven/total) [![Upstream](https://img.shields.io/badge/upstream-rehlds%2FReHLDS%203.15.0.898-blue)](https://github.com/rehlds/ReHLDS) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE) <img align="right" width="128" src="https://cdn2.steamgriddb.com/icon_thumb/6a9aeddfc689c1d0e3b9ccc3ab651bc5.png" alt="Sven Co-op" />
+Reverse-engineered (and bugfixed) HLDS, extended to speak the Sven Co-op protocol
 
 ## What is this?
 ReHLDS is a result of reverse engineering of original HLDS (build 6152/6153) using DWARF debug info embedded into linux version of HLDS, engine_i486.so
 
+**ReHLDS_Sven is an extension to the original ReHLDS project, which adds support of the Sven Co-op (Svengine, a game engine based on the original Half-Life 1 engine - GoldSrc) protocol.**
+
 Along with reverse engineering, a lot of defects and (potential) bugs were found and fixed
 
-You can try playing on one of many servers that are using ReHLDS: [Game Tracker](http://www.gametracker.com/search/?search_by=server_variable&search_by2=sv_version)
-
-> [!TIP]
-> ReHLDS linux-releases now is signed via `GPG`, pubkey is: `63547829004f07716f7be4856c32c4282e60fb67` and could be found at [https://keyserver.ubuntu.com/](https://keyserver.ubuntu.com/pks/lookup?search=63547829004f07716f7be4856c32c4282e60fb67+&fingerprint=on&op=index).
+> [!NOTE]
+> This is a fork of [rehlds/ReHLDS](https://github.com/rehlds/ReHLDS), rebuilt on top of current
+> upstream rather than drifting from an old branch point. The Sven Co-op work — originally from
+> [autisoid/ReHLDS_Sven](https://github.com/autisoid/ReHLDS_Sven) — is replayed commit by commit
+> onto upstream, and all of it is guarded by the `REHLDS_SVEN` compile-time define, so the tree
+> still builds as stock ReHLDS with that define removed from `rehlds/CMakeLists.txt` (or the MSVC
+> project).
 >
-> How to:
-> 1. [Download](https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x63547829004f07716f7be4856c32c4282e60fb67) `63547829004f07716f7be4856c32c4282e60fb67.asc` key
-> 2. Import: `gpg --import 63547829004f07716f7be4856c32c4282e60fb67.asc`
-> 3. Download release `archive` and `.asc` file.
-> 4. Verify: `gpg --verify some-rehlds.zip.asc some-rehlds.zip`.
+> The engine reports the **upstream** version it is built on, so `sv_version` lines up with the
+> ReHLDS release this actually corresponds to. See [Maintaining this fork](#maintaining-this-fork).
+
+## What this fork adds
+
+| | |
+|---|---|
+| **Sven Co-op protocol** | Protocol 48 as Svengine speaks it: widened user messages, long-encoded coords and fragment headers, raised `qlimits`, no packet munging, Sven's consistency/delta framing |
+| **Ready-to-run plugin stack** | Releases bundle [Metamod-R](https://github.com/rehlds/Metamod-R) + [ReUnion](https://github.com/rehlds/reunion) in a `gamedir/` tree, configured to accept non-Steam clients |
+| **Automatic ReUnion salt** | The engine generates a per-server `SteamIdHashSalt` on first run and preserves it across upgrades |
+| **Sven-specific cvars** | `sv_rehlds_sven_block_game_bans`, `sv_rehlds_sven_tolerate_steam_deny`, `sv_rehlds_maxusrcmdprocessticks`, `sv_rehlds_force_allow_lagcompensation`, `sv_log_daily` |
+| **Retail `server.so` fixes** | Recovers from the unterminated `MESSAGE_BEGIN` that killed servers ~30x/day, fixes a `DELTA_ParseDelta` stack overflow, honours `-nobreakpad` |
+| **Steam deny diagnostics** | Every Steam client deny is logged with its reason code, and the four Steam-*connectivity* reasons no longer drop legitimate players |
 
 ## Goals of the project
 <ul>
-<li>Provide more stable (than official) version of Half-Life dedicated server with extended API for mods and plugins</li>
+<li>Provide more stable (than official) version of Sven Co-op dedicated server with extended API for mods and plugins</li>
 <li>Performance optimizations (use of SSE for vector math for example) is another goal for the future</li>
+<li>Stay rebasable on upstream ReHLDS rather than drifting into a hard fork</li>
 </ul>
 
 ## 🛠 License
@@ -33,26 +47,79 @@ ReHLDS is licensed under the [MIT License](./LICENSE).
 > See [LICENSE-TRANSITION.md](./LICENSE-TRANSITION.md) for details.
 
 ## How can use it?
-ReHLDS is fully compatible with the official pre-anniversary edition of HLDS (engine version <= 8684) downloaded by steamcmd. All you have to do is to download ReHLDS binaries and replace original swds.dll/engine_i486.so. For windows you can also copy a swds.pdb file with a debug information.
+ReHLDS_Sven is fully compatible with the official SvenDS binaries, although it requires replacing `libsteam_api.so` (located at `rehlds/lib(/linux32)`) and `steamclient.so` (either take it from our releases or from steamcmd) to work.
 
 > [!CAUTION]  
-> ReHLDS is not compatible with an old 5xxx or below platforms downloaded by hldsupdatetool.
+> This project works only with Sven Co-op 5.26.
 
-#### Downloading HLDS via steamcmd
+#### Downloading SvenDS via steamcmd
 
 ```
-app_set_config 90 mod cstrike
-app_update 90 -beta steam_legacy validate
+app_update 276060 validate
 ```
 
 ## Downloads
-* [Release builds](https://github.com/rehlds/ReHLDS/releases)
-* [Dev builds](https://github.com/rehlds/ReHLDS/actions/workflows/build.yml)
+* [Release builds](https://github.com/coffeegrind123/ReHLDS_Sven/releases)
+* [Dev builds](https://github.com/coffeegrind123/ReHLDS_Sven/actions/workflows/build.yml)
 
-ReHLDS binaries require `SSE`, `SSE2` and `SSE3` instruction sets to run and can benefit from `SSE4.1` and `SSE4.2`
+ReHLDS_Sven binaries require `SSE`, `SSE2` and `SSE3` instruction sets to run and can benefit from `SSE4.1` and `SSE4.2`
 
-<b>Warning!</b> ReHLDS is not binary compatible with original hlds since it's compiled with compilers other than ones used for original hlds.
-This means that plugins that do binary code analysis (Orpheu for example) probably will not work with ReHLDS.
+<b>Warning!</b> ReHLDS_Sven is not binary compatible with original svends since it's compiled with compilers other than ones used for original svends.
+This means that plugins that do binary code analysis (Orpheu for example) probably will not work with ReHLDS_Sven.
+
+### What is in a release
+
+`rehlds-sven-bin-<version>.zip`:
+
+| path | what |
+|---|---|
+| `bin/linux32/`, `bin/win32/` | engine, dedicated launcher, HLTV and filesystem binaries |
+| `hlsdk/` | headers for building plugins against this engine |
+| `gamedir/` | drop-in overlay for your mod directory — see below |
+
+`rehlds-sven-dbg-<version>.7z` holds the matching debug symbols.
+
+> [!TIP]
+> Linux release binaries are built in `debian:11-slim`, so they require only `GLIBC_2.7`
+> (`engine_i486.so`) and `GLIBC_2.1` (`hlds_linux`) and will run on anything newer.
+
+### The bundled `gamedir/` overlay
+
+Copy its contents into your mod directory (e.g. `svencoop/`). It is the plugin stack a
+non-Steam server needs, already wired up:
+
+| path | what |
+|---|---|
+| `addons/metamod/metamod_i386.so`, `metamod.dll` | [Metamod-R](https://github.com/rehlds/Metamod-R) `1.3.0.149` |
+| `addons/metamod/config.ini` | points Metamod at the real game library |
+| `addons/metamod/plugins.ini` | plugin list, ReUnion first |
+| `addons/reunion/reunion_mm_i386.so`, `reunion_mm.dll` | [ReUnion](https://github.com/rehlds/reunion) `0.2.0.25` |
+| `reunion.cfg` | ReUnion config, **non-Steam clients accepted** |
+| `rotate-reunion-salt.sh` | forces a new `SteamIdHashSalt` (see below) |
+
+> [!IMPORTANT]
+> ReUnion ships `cid_NoSteam47 = 5` and `cid_NoSteam48 = 5` by default, and `5` means
+> **drop the client** — the opposite of why ReUnion gets deployed. The bundled config sets
+> both to `3` (accept, assign a generated `STEAM_x:y:z`). Everything else is ReUnion's own
+> shipped config for the pinned version.
+
+#### The ReUnion salt is handled for you
+
+`reunion.cfg` ships with `SteamIdHashSalt = GENERATE_ON_FIRST_RUN`, and the engine replaces
+it with a value from the OS CSPRNG the first time the server starts — a salt baked into a
+public release would be the same for everyone who downloaded it, and so no salt at all.
+
+The generated value is also written to `<gamedir>/.reunion_salt` (mode `0600`).
+
+> [!WARNING]
+> **Keep `.reunion_salt`.** It is what lets a newer release be unpacked over an existing
+> install without minting a *new* salt — and a new salt changes every generated
+> `STEAM_x:y:z`, which invalidates every ban and every stored per-player record.
+
+A salt you set by hand is never touched, and `-noreunionsalt` disables the behaviour entirely.
+An empty salt is not a safe default: with `AuthVersion = 3` it makes ReUnion fail to initialise
+almost silently — Metamod still reports the plugin as configured and the server boots and plays
+normally, and only `meta list` reveals it never loaded.
 
 ## Configuring
 <details>
@@ -78,7 +145,7 @@ This means that plugins that do binary code analysis (Orpheu for example) probab
 <li>sv_rehlds_stringcmdrate_burst_punish // Time in minutes for which the player will be banned (0 - Permanent, use a negative number for a kick). Default: 5
 <li>sv_rehlds_userinfo_transmitted_fields // Userinfo fields only with these keys will be transmitted to clients via network. If not set then all fields will be transmitted (except prefixed with underscore). Each key must be prefixed by backslash, for example "\name\model\*sid\*hltv\bottomcolor\topcolor". See [wiki](https://github.com/rehlds/ReHLDS/wiki/Userinfo-keys) to collect sufficient set of keys for your server. Default: ""
 <li>sv_rehlds_attachedentities_playeranimationspeed_fix // Fixes bug with gait animation speed increase when player has some attached entities (aiments). Can cause animation lags when cl_updaterate is low. Default: 0
-<li>sv_rehlds_maxclients_from_single_ip // Limit number of connections at the same time from single IP address, not confuse to already connected players. Default: 5
+<li>sv_rehlds_maxclients_from_single_ip // Limit number of connections at the same time from single IP address, not confuse to already connected players. Default: 12
 <li>sv_rehlds_local_gametime &lt;1|0&gt; // A feature of local gametime which decrease "lags" if you run same map for a long time. Default: 0
 <li>sv_rehlds_allow_large_sprays &lt;1|0&gt; // Allow larger custom logos than 64x64. Default: 1
 <li>sv_use_entity_file // Use custom entity file for a map. Path to an entity file will be "maps/[map name].ent". 0 - use original entities. 1 - use .ent files from maps directory. 2 - use .ent files from maps directory and create new .ent file if not exist.
@@ -102,6 +169,21 @@ This means that plugins that do binary code analysis (Orpheu for example) probab
 <li>sv_rehlds_movecmdtime_max_warnings // Maximum allowed speedhack/slowmo warnings before the punishment is applied. -1 - disable detection. Default: -1
 <li>sv_rehlds_movecmdtime_punish // Time in minutes for which the player will be banned for speedhacking/slowing (-1 - Kick, 0 - Permanent, use a negative number for a kick). Default: -1
 <li>sv_reconnect_timeout // Hard deadline in seconds for a client to re-initiate its connection after a level change, independent of netchan activity. Closes a phantom-slot exploit where a cheat blocks the "reconnect" command and keeps the netchan warm so sv_timeout never fires. 0 - disabled. Default: 30
+</ul>
+
+#### Sven Co-op specific (built with `REHLDS_SVEN`)
+<ul>
+<li>sv_rehlds_sven_block_game_bans &lt;1|0&gt; // Block shadow bans issued by the game .dll (kick/ban commands the game library injects for players it has blacklisted server-side). Default: 1
+<li>sv_rehlds_sven_tolerate_steam_deny &lt;1|0&gt; // Keep a client that Steam denies for a Steam-<i>connectivity</i> reason (SteamConnectionError, SteamConnectionLost, SteamResponseTimedOut, NotLoggedOn) instead of dropping them. Those four are verdicts about the server's own link to Steam, not about the player, and on a server whose identities come from ReUnion they would otherwise give a legitimate Steam owner a worse experience than a non-Steam client. Client-side verdicts (Cheater/VAC, NoLicense, InvalidVersion, IncompatibleAnticheat, IncompatibleSoftware, MemoryCorruption, LoggedInElseWhere) are always enforced. Every deny is logged with its reason code either way. 0 restores stock behaviour. Default: 1
+<li>sv_rehlds_maxusrcmdprocessticks // Max number of usercmds processed for a single client within one server frame; 0 disables the limit. Default: 24
+<li>sv_rehlds_force_allow_lagcompensation &lt;1|0&gt; // Force lag compensation on regardless of what the client asks for. Default: 0
+<li>sv_log_daily &lt;1|0&gt; // Roll the server log over to a new file each day rather than only on map change. Default: 1
+</ul>
+
+#### Command-line parameters changed by this fork
+<ul>
+<li>-noreunionsalt // Skip localising the ReUnion SteamIdHashSalt on startup. Only relevant with the bundled reunion.cfg; a salt set by hand is never touched regardless.
+<li>-nobreakpad // Stock HLDS parameter, now also honoured in FileSystem_SetGameDirectory — previously that call pulled in Steam's breakpad crash handler regardless, so the parameter only half worked.
 </ul>
 </details>
 
@@ -179,6 +261,58 @@ Select the preferred C/C++ Compiler installation
 </pre>
 </li>
 </ul>
+</details>
+
+## Maintaining this fork
+
+<details>
+<summary>Click to expand</summary>
+
+### Versioning
+
+The engine reports the **upstream ReHLDS version this fork is built on**, not a
+fork-inflated one. ReHLDS derives the build number from `git rev-list --count`, so
+the commits this fork adds would otherwise inflate it past build numbers upstream
+has not reached yet.
+
+`rehlds/version/upstream_base` records the upstream commit currently rebased onto;
+`appversion.sh` / `appversion.bat` count from there. Both fall back to counting from
+`HEAD` if the file is missing or the SHA does not resolve.
+
+### Rebasing onto a newer upstream
+
+1. Replay this fork's commits onto the new `rehlds/ReHLDS` master.
+2. Update `rehlds/version/upstream_base` to the new upstream commit **in the same
+   commit that performs the rebase**, or the reported version will be wrong.
+3. Confirm: `bash rehlds/version/appversion.sh .` should print the upstream version.
+
+### Releases
+
+Tags are `<upstream-version>-sven<n>`, e.g. `3.15.0.898-sven1`. The upstream version
+comes first so the base is obvious and releases sort correctly; `-sven<n>` increments
+for further releases on the same upstream base and resets after a rebase.
+
+### Bundled plugin versions
+
+Metamod-R and ReUnion are **pinned** in `.github/workflows/build.yml` (`METAMOD_VERSION`,
+`REUNION_VERSION`) rather than tracking "latest", so a release is reproducible and only
+ships versions this stack has actually been run against. Bump them deliberately.
+
+The packaging step derives `reunion.cfg` from ReUnion's *own* shipped config for the pinned
+version and changes only the authid policy, so it does not go stale against a bump. It then
+guards its own output — both plugin binaries per platform, `cid_NoSteam47/48 == 3`, and the
+salt sentinel matching the engine's `REUNION_SALT_SENTINEL` — and fails the build rather than
+publishing a subtly broken archive.
+
+Publishing a GitHub release triggers the build, and the `publish` job attaches
+`rehlds-sven-bin-<version>.zip` and `rehlds-sven-dbg-<version>.7z`.
+
+> [!NOTE]
+> GitHub disables automatic workflow triggers on newly created forks. If a release or
+> push does not start a run, open the **Actions** tab once and confirm the prompt to
+> enable workflows. Until then a build can be started manually against the tag with
+> `gh workflow run "C/C++ CI" --ref <tag>`, which still satisfies the publish job.
+
 </details>
 
 ## How can I help the project?

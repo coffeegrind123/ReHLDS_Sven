@@ -270,12 +270,13 @@ cvar_t sv_rehlds_userinfo_transmitted_fields = { "sv_rehlds_userinfo_transmitted
 cvar_t sv_rehlds_attachedentities_playeranimationspeed_fix = {"sv_rehlds_attachedentities_playeranimationspeed_fix", "0", 0, 0.0f, nullptr};
 cvar_t sv_rehlds_local_gametime = {"sv_rehlds_local_gametime", "0", 0, 0.0f, nullptr};
 cvar_t sv_rehlds_send_mapcycle = { "sv_rehlds_send_mapcycle", "0", 0, 0.0f, nullptr };
-cvar_t sv_rehlds_maxclients_from_single_ip = { "sv_rehlds_maxclients_from_single_ip", "5", 0, 5.0f, nullptr };
+cvar_t sv_rehlds_maxclients_from_single_ip = { "sv_rehlds_maxclients_from_single_ip", "12", 0, 12.0f, nullptr };
 cvar_t sv_use_entity_file = { "sv_use_entity_file", "0", 0, 0.0f, nullptr };
 cvar_t sv_usercmd_custom_random_seed = { "sv_usercmd_custom_random_seed", "0", 0, 0.0f, nullptr };
 cvar_t sv_rehlds_allow_large_sprays = { "sv_rehlds_allow_large_sprays", "1", 0, 1.0f, nullptr };
 #ifdef REHLDS_SVEN
 cvar_t sv_rehlds_sven_block_game_bans = { "sv_rehlds_sven_block_game_bans", "1", FCVAR_SERVER | FCVAR_ARCHIVE, 1.0f, nullptr };
+cvar_t sv_rehlds_sven_tolerate_steam_deny = { "sv_rehlds_sven_tolerate_steam_deny", "1", FCVAR_SERVER | FCVAR_ARCHIVE, 1.0f, nullptr };
 GameBanDelayedCommand_t* g_pGameBanDelayedCommandHead;
 GameBanDelayedCommand_t* g_pGameBanDelayedCommandTail;
 #endif // REHLDS_SVEN
@@ -8700,6 +8701,7 @@ void SV_Init(void)
 
 #ifdef REHLDS_SVEN
 	Cvar_RegisterVariable(&sv_rehlds_sven_block_game_bans);
+	Cvar_RegisterVariable(&sv_rehlds_sven_tolerate_steam_deny);
 #endif // REHLDS_SVEN
 
 	Cvar_RegisterVariable(&sv_rollspeed);
