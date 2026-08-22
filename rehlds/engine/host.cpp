@@ -1244,8 +1244,10 @@ void Host_Shutdown(void)
 
 #ifdef REHLDS_FIXES
 	Host_ShutdownServer(FALSE);
-#else
+#elif defined(REHLDS_SVEN)
 	SV_ServerShutdown(NULL);
+#else
+	SV_ServerShutdown();
 #endif
 
 	Voice_Deinit();

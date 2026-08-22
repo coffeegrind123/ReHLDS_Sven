@@ -717,6 +717,7 @@ void ClearIOStates(void)
 #endif // SWDS
 }
 
+#ifdef REHLDS_SVEN
 /*
 ====================
 Sys_LoadServerDLL
@@ -770,6 +771,7 @@ void Sys_InitServerDLL( void )
 		Con_DPrintf("%s: no g_pServerDLL!!!\n", __func__);
 	}
 }
+#endif // REHLDS_SVEN
 
 /*
 ====================
