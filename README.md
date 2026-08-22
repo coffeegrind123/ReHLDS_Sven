@@ -46,8 +46,9 @@ ReHLDS is licensed under the [MIT License](./LICENSE).
 > Originally released under [GPLv3](https://www.gnu.org/licenses/gpl-3.0.html), ReHLDS transitioned to the MIT License in July 2025 with the agreement of the core contributors.  
 > See [LICENSE-TRANSITION.md](./LICENSE-TRANSITION.md) for details.
 
-## How can use it?
-ReHLDS_Sven is fully compatible with the official SvenDS binaries, although it requires replacing `libsteam_api.so` (located at `rehlds/lib(/linux32)`) and `steamclient.so` (either take it from our releases or from steamcmd) to work.
+## How do I use it?
+ReHLDS_Sven is a drop-in replacement for the engine in an official SvenDS install. Install
+SvenDS first, then overwrite the files below.
 
 > [!CAUTION]  
 > This project works only with Sven Co-op 5.26.
@@ -57,6 +58,55 @@ ReHLDS_Sven is fully compatible with the official SvenDS binaries, although it r
 ```
 app_update 276060 validate
 ```
+
+### Installing over a SvenDS install
+
+From `bin/linux32/` in the release (`bin/win32/` on Windows), copy into the SvenDS root:
+
+| file | why |
+|---|---|
+| `engine_i486.so` / `swds.dll` | the fork itself |
+| `hlds_linux` / `hlds.exe` | dedicated launcher, matched to the engine |
+| `libsteam_api.so` / `steam_api.dll` | **required**, and easy to miss — SvenDS ships its own copy and it has to be overwritten too |
+
+Then copy the `gamedir/` overlay into your mod directory — see
+[The bundled `gamedir/` overlay](#the-bundled-gamedir-overlay).
+
+> [!IMPORTANT]
+> `steamclient.so` is **not** in our releases and is not part of this project. It comes from
+> steamcmd — the Steamworks SDK redist depot, alongside SvenDS itself — and the engine expects
+> to find it at `~/.steam/sdk32/steamclient.so`, *not* in the server directory. A symlink is
+> the usual way:
+>
+> ```sh
+> mkdir -p ~/.steam/sdk32
+> ln -sf /path/to/svends/steamclient.so ~/.steam/sdk32/steamclient.so
+> ```
+
+The release also ships `filesystem_stdio.so`, `hltv`, `core.so`, `demoplayer.so` and
+`proxy.so`. These are ReHLDS builds of stock components and are not required: SvenDS's own
+copies work, and the reference deployment for this fork runs retail's `filesystem_stdio.so`
+against our engine. Replace them only if you have a reason to.
+
+### Upgrading an existing install
+
+Overwrite the same three files and restart. Two things not to do:
+
+- **Do not delete `<gamedir>/.reunion_salt`.** A new salt changes every generated
+  `STEAM_x:y:z`, which invalidates every ban and stored per-player record. See
+  [the salt section](#the-reunion-salt-is-handled-for-you).
+- **Do not re-copy `gamedir/` unless the pinned plugin versions changed.** It would overwrite
+  a `reunion.cfg` you have edited. The pinned versions are in the release notes and in
+  [Bundled plugin versions](#bundled-plugin-versions).
+
+To confirm what is actually running, check the engine's own build string:
+
+```sh
+strings -a engine_i486.so | grep -E '^(ReHLDS version|Build from)'
+```
+
+A `+m` suffix on the version (`3.15.0.898-dev+m`) means that binary was built from a modified
+working tree rather than from the commit it names — a local build, not a release one.
 
 ## Downloads
 * [Release builds](https://github.com/coffeegrind123/ReHLDS_Sven/releases)
@@ -73,7 +123,7 @@ This means that plugins that do binary code analysis (Orpheu for example) probab
 
 | path | what |
 |---|---|
-| `bin/linux32/`, `bin/win32/` | engine, dedicated launcher, HLTV and filesystem binaries |
+| `bin/linux32/`, `bin/win32/` | engine, dedicated launcher, `libsteam_api.so` / `steam_api.dll`, plus HLTV and filesystem binaries |
 | `hlsdk/` | headers for building plugins against this engine |
 | `gamedir/` | drop-in overlay for your mod directory — see below |
 
