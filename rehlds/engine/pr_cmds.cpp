@@ -2364,7 +2364,48 @@ void EXT_FUNC PF_MessageBegin_I(int msg_dest, int msg_type, const float *pOrigin
 	}
 
 	if (gMsgStarted)
+#ifdef REHLDS_SVEN
+	{
+		// Sven Co-op's official server.so leaves a message unterminated: it calls
+		// MESSAGE_BEGIN and then returns without a matching MESSAGE_END. gMsgStarted is a
+		// global that is set ONLY here and cleared ONLY in PF_MessageEnd_I -- nothing
+		// resets it on level change, client drop or shutdown -- so a single leak is
+		// permanent, and the NEXT MessageBegin dies even though it is the victim rather
+		// than the culprit. Upstream's Sys_Error takes the whole server down with it.
+		//
+		// Measured against the retail Sven 5.26 server.so on this engine: 484 fatals over
+		// 8 days, ~30/day, every one of them this same check. The pattern was always
+		// map change -> server empties -> fatal seconds later, which is a leak surviving
+		// the level transition, not a burst of bad calls.
+		//
+		// Discarding the stale message is safe, and provably so rather than hopefully:
+		// PF_MessageEnd_I is the ONLY thing that copies gMsgBuffer into a destination
+		// (MSG_WriteBuf(pBuffer, ...) near the end of it). A message that never reached
+		// MessageEnd has therefore written nothing to any client's netchan, datagram or
+		// signon buffer, so dropping it cannot desync or corrupt a stream -- there is
+		// nothing on the wire to corrupt. The cost is one lost usermessage; the
+		// alternative is losing the server.
+		//
+		// The name is logged, not just the id, because the id alone is not identifying:
+		// usermessage numbers are assigned in registration order and differ per game.
+		UserMsg *pLeaked = sv_gpUserMsgs;
+		while (pLeaked && pLeaked->iMsg != gMsgType)
+			pLeaked = pLeaked->next;
+
+		Con_Printf("%s: discarding unterminated msg '%d' (%s, dest %d, %d bytes) started by "
+		           "the game DLL without a matching MESSAGE_END; recovering instead of "
+		           "shutting down\n",
+		           __func__, gMsgType, pLeaked ? pLeaked->szName : "unregistered",
+		           gMsgDest, gMsgBuffer.cursize);
+
+		gMsgStarted = FALSE;
+		gMsgEntity = NULL;
+		gMsgBuffer.cursize = 0;
+		gMsgBuffer.flags = SIZEBUF_ALLOW_OVERFLOW;
+	}
+#else //!REHLDS_SVEN
 		Sys_Error("%s: New message started when msg '%d' has not been sent yet", __func__, gMsgType);
+#endif //REHLDS_SVEN
 
 	if (msg_type == 0)
 		Sys_Error("%s: Tried to create a message with a bogus message type ( 0 )", __func__);

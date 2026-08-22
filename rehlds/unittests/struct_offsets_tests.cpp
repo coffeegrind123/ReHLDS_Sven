@@ -20,6 +20,16 @@
 
 TEST(StructOffsets, ReversingChecks, 5000)
 {
+#ifndef REHLDS_SVEN
+	// These offsets pin client_t to the layout of the stock Half-Life engine, which is
+	// what ReHLDS must stay binary-compatible with.
+	//
+	// REHLDS_SVEN deliberately breaks that compatibility: qlimits.h raises MAX_MODELS,
+	// MAX_SOUNDS, MAX_GENERIC, MAX_EVENTS and MAX_PACKET_ENTITIES to match Sven Co-op,
+	// which grows the arrays embedded in client_t and shifts every field after them.
+	// The Sven target layout cannot be asserted here without the Sven Co-op engine to
+	// reverse it from, so rather than encode numbers we cannot verify, the checks are
+	// compiled out and the actual sizes are reported below for inspection.
 	CHECK_STRUCT_OFFSET(client_t, active, 0, 0);
 	CHECK_STRUCT_OFFSET(client_t, chokecount, 0x2540, 0x2430);
 	CHECK_STRUCT_OFFSET(client_t, datagram, 0x25C0, 0x24AC);
@@ -29,6 +39,10 @@ TEST(StructOffsets, ReversingChecks, 5000)
 	CHECK_STRUCT_OFFSET(client_t, connection_started, 0x3578, 0x3460);
 
 	//CHECK_STRUCT_SIZE(server_t, 0x46418, 0x4640C);
+#else // REHLDS_SVEN
+	printf("sizeof client_t: 0x%2X\n", sizeof(client_t));
+	printf("offsetof client_t::m_VoiceStreams: 0x%2X\n", offsetof(client_t, m_VoiceStreams));
+#endif // REHLDS_SVEN
 
 	printf("sizeof server_t: 0x%2X\n", sizeof(server_t));
 	printf("sizeof CSteam3Server: 0x%2X\n", sizeof(CSteam3Server));

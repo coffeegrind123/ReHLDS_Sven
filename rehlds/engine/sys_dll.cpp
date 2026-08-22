@@ -883,6 +883,266 @@ sys_dll2.cpp
 extern bool Sys_LoadServerDLL( const char* modulename );
 extern void Sys_InitServerDLL( void );
 
+#ifdef REHLDS_SVEN
+
+#ifdef _WIN32
+// osconfig.h defines WIN32_LEAN_AND_MEAN, which excludes wincrypt.h from windows.h,
+// so CryptAcquireContext/CryptGenRandom need it pulled in explicitly. The imports come
+// from advapi32, which the engine already links.
+#include <wincrypt.h>
+#endif // _WIN32
+
+// Placeholder shipped in the bundled reunion.cfg. A salt distributed inside a public
+// release artifact is not a secret, so releases ship this instead of a real value and
+// each deployment generates its own on first run.
+#define REUNION_SALT_SENTINEL	"GENERATE_ON_FIRST_RUN"
+#define REUNION_SALT_BYTES	24	// -> 48 hex chars; ReUnion wants >= 32
+#define REUNION_SALT_MINLEN	32
+
+// Fills pszOut with REUNION_SALT_BYTES*2 hex chars from the OS CSPRNG.
+// Returns false rather than falling back to a weak source: a predictable salt is
+// worse than no server, because it silently produces forgeable generated SteamIDs.
+static bool Sven_GenerateSalt(char *pszOut, size_t nOutSize)
+{
+	unsigned char rgBytes[REUNION_SALT_BYTES];
+
+	if (nOutSize < sizeof(rgBytes) * 2 + 1)
+		return false;
+
+#ifdef _WIN32
+	HCRYPTPROV hProv = 0;
+	if (!CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT | CRYPT_SILENT))
+		return false;
+
+	BOOL bOk = CryptGenRandom(hProv, sizeof(rgBytes), rgBytes);
+	CryptReleaseContext(hProv, 0);
+
+	if (!bOk)
+		return false;
+#else // _WIN32
+	FILE *fpRandom = fopen("/dev/urandom", "rb");
+	if (!fpRandom)
+		return false;
+
+	size_t nRead = fread(rgBytes, 1, sizeof(rgBytes), fpRandom);
+	fclose(fpRandom);
+
+	if (nRead != sizeof(rgBytes))
+		return false;
+#endif // _WIN32
+
+	for (size_t i = 0; i < sizeof(rgBytes); i++)
+		Q_snprintf(&pszOut[i * 2], 3, "%02x", rgBytes[i]);
+
+	pszOut[sizeof(rgBytes) * 2] = '\0';
+	return true;
+}
+
+// Reads a previously generated salt from <gamedir>/.reunion_salt, if it is present
+// and long enough. This is what makes an upgrade safe: dropping a newer release over
+// an install restores the sentinel in reunion.cfg, and without the sidecar we would
+// mint a *new* salt and silently invalidate every generated SteamID -- meaning every
+// ban and every stored per-player record.
+static bool Sven_ReadSaltSidecar(const char *pszPath, char *pszOut, size_t nOutSize)
+{
+	FILE *fp = fopen(pszPath, "rb");
+	if (!fp)
+		return false;
+
+	size_t nRead = fread(pszOut, 1, nOutSize - 1, fp);
+	fclose(fp);
+
+	pszOut[nRead] = '\0';
+
+	// Trim trailing whitespace/newlines the user's editor may have added.
+	while (nRead > 0 && (pszOut[nRead - 1] == '\n' || pszOut[nRead - 1] == '\r' ||
+	                     pszOut[nRead - 1] == ' '  || pszOut[nRead - 1] == '\t'))
+	{
+		pszOut[--nRead] = '\0';
+	}
+
+	return nRead >= REUNION_SALT_MINLEN;
+}
+
+// Localises the ReUnion SteamIdHashSalt on first run.
+//
+// Does nothing unless the salt is still the shipped sentinel (or empty), so a salt an
+// operator set by hand is never touched. Must run before the game DLL is loaded, since
+// Metamod loads ReUnion from there and ReUnion reads its config at load time.
+//
+// An empty salt is not a benign default: with AuthVersion = 3 it makes ReUnion fail to
+// initialise almost silently -- Metamod still reports the plugin as configured and the
+// server boots and plays normally, and only `meta list` shows it never loaded.
+static void Sven_LocalizeReunionSalt()
+{
+	if (COM_CheckParm("-noreunionsalt"))
+		return;
+
+	char szCfgPath[MAX_PATH];
+	char szSidecarPath[MAX_PATH];
+	Q_snprintf(szCfgPath, sizeof(szCfgPath), "%s/reunion.cfg", com_gamedir);
+	Q_snprintf(szSidecarPath, sizeof(szSidecarPath), "%s/.reunion_salt", com_gamedir);
+
+	FILE *fpCfg = fopen(szCfgPath, "rb");
+	if (!fpCfg)
+		return; // No ReUnion config -- this server does not use it. Not an error.
+
+	fseek(fpCfg, 0, SEEK_END);
+	long nSize = ftell(fpCfg);
+	fseek(fpCfg, 0, SEEK_SET);
+
+	if (nSize <= 0 || nSize > 1024 * 1024)
+	{
+		fclose(fpCfg);
+		Con_Printf("%s: %s has an implausible size (%ld bytes), leaving it alone\n", __func__, szCfgPath, nSize);
+		return;
+	}
+
+	char *pszCfg = (char *)Mem_Malloc(nSize + 1);
+	if (!pszCfg)
+	{
+		fclose(fpCfg);
+		return;
+	}
+
+	size_t nRead = fread(pszCfg, 1, nSize, fpCfg);
+	fclose(fpCfg);
+	pszCfg[nRead] = '\0';
+
+	// Locate the SteamIdHashSalt line and work out whether it still needs localising.
+	char *pszLine = NULL;
+	for (char *p = pszCfg; *p; )
+	{
+		char *pszEol = Q_strchr(p, '\n');
+
+		char *pszScan = p;
+		while (*pszScan == ' ' || *pszScan == '\t')
+			pszScan++;
+
+		if (!Q_strnicmp(pszScan, "SteamIdHashSalt", sizeof("SteamIdHashSalt") - 1))
+		{
+			pszLine = p;
+			break;
+		}
+
+		if (!pszEol)
+			break;
+
+		p = pszEol + 1;
+	}
+
+	if (!pszLine)
+	{
+		Mem_Free(pszCfg);
+		return; // No such key; not a ReUnion config we recognise.
+	}
+
+	char *pszEol = Q_strchr(pszLine, '\n');
+	size_t nLineLen = pszEol ? (size_t)(pszEol - pszLine) : Q_strlen(pszLine);
+
+	// Extract the current value so we only act on the sentinel or an empty setting.
+	char szValue[256] = "";
+	const char *pszEq = (const char *)memchr(pszLine, '=', nLineLen);
+	if (pszEq)
+	{
+		const char *pszVal = pszEq + 1;
+		const char *pszEnd = pszLine + nLineLen;
+
+		while (pszVal < pszEnd && (*pszVal == ' ' || *pszVal == '\t'))
+			pszVal++;
+		while (pszEnd > pszVal && (pszEnd[-1] == ' ' || pszEnd[-1] == '\t' || pszEnd[-1] == '\r'))
+			pszEnd--;
+
+		size_t nValLen = (size_t)(pszEnd - pszVal);
+		if (nValLen >= sizeof(szValue))
+			nValLen = sizeof(szValue) - 1;
+
+		Q_memcpy(szValue, pszVal, nValLen);
+		szValue[nValLen] = '\0';
+	}
+
+	if (szValue[0] && Q_stricmp(szValue, REUNION_SALT_SENTINEL))
+	{
+		Mem_Free(pszCfg);
+		return; // Operator-configured salt. Never rotate it.
+	}
+
+	char szSalt[REUNION_SALT_BYTES * 2 + 1];
+	bool bRestored = Sven_ReadSaltSidecar(szSidecarPath, szSalt, sizeof(szSalt));
+
+	if (!bRestored && !Sven_GenerateSalt(szSalt, sizeof(szSalt)))
+	{
+		Mem_Free(pszCfg);
+		Con_Printf("%s: could not read the OS random source; leaving %s alone.\n"
+		           "  ReUnion will fail to initialise with AuthVersion >= 3 and an unset salt.\n", __func__, szCfgPath);
+		return;
+	}
+
+	// Rewrite via a temporary file so an interrupted write cannot leave a truncated config.
+	char szTmpPath[MAX_PATH];
+	Q_snprintf(szTmpPath, sizeof(szTmpPath), "%s/reunion.cfg.tmp", com_gamedir);
+
+	FILE *fpTmp = fopen(szTmpPath, "wb");
+	if (!fpTmp)
+	{
+		Mem_Free(pszCfg);
+		Con_Printf("%s: cannot write %s (read-only game directory?); leaving the config alone.\n", __func__, szTmpPath);
+		return;
+	}
+
+	bool bWriteOk =
+		fwrite(pszCfg, 1, (size_t)(pszLine - pszCfg), fpTmp) == (size_t)(pszLine - pszCfg) &&
+		fprintf(fpTmp, "SteamIdHashSalt = %s", szSalt) > 0;
+
+	if (bWriteOk && pszEol)
+	{
+		size_t nTail = nRead - (size_t)(pszEol - pszCfg);
+		bWriteOk = fwrite(pszEol, 1, nTail, fpTmp) == nTail;
+	}
+
+	if (fclose(fpTmp) != 0)
+		bWriteOk = false;
+
+	Mem_Free(pszCfg);
+
+	if (!bWriteOk)
+	{
+		remove(szTmpPath);
+		Con_Printf("%s: failed writing %s; leaving the original config alone.\n", __func__, szTmpPath);
+		return;
+	}
+
+	remove(szCfgPath); // rename() will not replace an existing file on Windows.
+	if (rename(szTmpPath, szCfgPath) != 0)
+	{
+		Con_Printf("%s: failed to move %s into place.\n", __func__, szTmpPath);
+		return;
+	}
+
+	if (bRestored)
+	{
+		Con_Printf("ReUnion: restored the SteamIdHashSalt from %s into reunion.cfg.\n", szSidecarPath);
+		return;
+	}
+
+	// Record it so a later release drop-in restores this salt instead of minting a new one.
+	FILE *fpSidecar = fopen(szSidecarPath, "wb");
+	if (fpSidecar)
+	{
+		fwrite(szSalt, 1, Q_strlen(szSalt), fpSidecar);
+		fclose(fpSidecar);
+#ifndef _WIN32
+		chmod(szSidecarPath, S_IRUSR | S_IWUSR);
+#endif
+	}
+
+	Con_Printf("ReUnion: generated a SteamIdHashSalt for this server and saved it to %s.\n"
+	           "  Keep that file: rotating the salt changes every generated SteamID, which\n"
+	           "  invalidates every ban and every stored per-player record.\n", szSidecarPath);
+}
+
+#endif // REHLDS_SVEN
+
 void LoadEntityDLLs(const char* szBaseDir)
 {
 	FileHandle_t hLibListFile;
@@ -906,6 +1166,12 @@ void LoadEntityDLLs(const char* szBaseDir)
 	SV_ResetModInfo();
 	g_iextdllMac = 0;
 	Q_memset(g_rgextdll, 0, sizeof(g_rgextdll));
+
+#ifdef REHLDS_SVEN
+	// Before the game DLL loads: Metamod loads ReUnion from there, and ReUnion reads
+	// its config at load time, so a salt written after this point would not be seen.
+	Sven_LocalizeReunionSalt();
+#endif // REHLDS_SVEN
 
 	Q_strncpy(szGameDir, com_gamedir, sizeof(szGameDir) - 1);
 	if (Q_stricmp(szGameDir, "svencoop"))

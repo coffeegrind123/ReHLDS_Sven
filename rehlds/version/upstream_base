@@ -1,0 +1,13 @@
+#
+# The upstream rehlds/ReHLDS commit this fork is currently rebased onto.
+#
+# ReHLDS encodes its build number as `git rev-list --count`, so a fork that adds
+# commits on top would otherwise report a higher build number than the upstream
+# release it is actually based on. appversion.sh / appversion.bat read this file
+# and count from the commit named here instead of from HEAD, so the reported
+# version always matches the upstream ReHLDS this fork is built on.
+#
+# Update this on every rebase onto a newer upstream, in the same commit that
+# performs the rebase. Blank or unresolvable falls back to counting from HEAD.
+#
+0124d56c3d888d922eb045775f71c6682ad1226f

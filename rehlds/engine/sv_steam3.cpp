@@ -96,8 +96,110 @@ void CSteam3Server::OnGSClientDeny(GSClientDeny_t *pGSClientDeny)
 		OnGSClientDenyHelper(cl, pGSClientDeny->m_eDenyReason, pGSClientDeny->m_rgchOptionalText);
 }
 
+#ifdef REHLDS_SVEN
+/*
+=================
+SV_Steam3DenyReasonName
+
+The deny reason as a NAME, because the numeric EDenyReason is what actually distinguishes the
+twelve cases below and none of the drop messages carries it.
+
+⚠ This exists because "Unable to connect to Steam" is a MESSAGE, not a diagnosis. It is the text
+for exactly one reason (k_EDenySteamConnectionError), it is emitted for both GSClientDeny AND
+GSClientKick, and nothing in the log said which fired or what Steam actually reported. Measured
+2026-08-19 on the self-hosted Sven server: a legitimate retail Steam client
+(":P<1><STEAM_0:1:36684470>") connected, played through a level change, and was dropped ~100s in
+with that message and no other trace — on a server whose own log a minute earlier said
+"Connection to Steam servers successful." and "VAC secure mode is activated."
+=================
+*/
+static const char *SV_Steam3DenyReasonName(EDenyReason eDenyReason)
+{
+	switch (eDenyReason)
+	{
+	case k_EDenyInvalidVersion:        return "InvalidVersion";
+	case k_EDenyGeneric:               return "Generic";
+	case k_EDenyNotLoggedOn:           return "NotLoggedOn";
+	case k_EDenyNoLicense:             return "NoLicense";
+	case k_EDenyCheater:               return "Cheater";
+	case k_EDenyLoggedInElseWhere:     return "LoggedInElseWhere";
+	case k_EDenyUnknownText:           return "UnknownText";
+	case k_EDenyIncompatibleAnticheat: return "IncompatibleAnticheat";
+	case k_EDenyMemoryCorruption:      return "MemoryCorruption";
+	case k_EDenyIncompatibleSoftware:  return "IncompatibleSoftware";
+	case k_EDenySteamConnectionLost:   return "SteamConnectionLost";
+	case k_EDenySteamConnectionError:  return "SteamConnectionError";
+	case k_EDenySteamResponseTimedOut: return "SteamResponseTimedOut";
+	case k_EDenySteamValidationStalled: return "SteamValidationStalled";
+	case k_EDenySteamOwnerLeftGuestUser: return "SteamOwnerLeftGuestUser";
+	case k_EDenyInvalid:               return "Invalid";
+	default:                           return "unknown";
+	}
+}
+
+/*
+=================
+SV_Steam3DenyIsTransient
+
+Is this deny a STEAM CONNECTIVITY problem rather than a statement about the player?
+
+The distinction is the whole point. Steam reports two different kinds of thing through one
+callback: "this account is banned / does not own the game / is elsewhere" (a verdict about the
+CLIENT) and "I could not reach Steam to check" (a verdict about the SERVER'S link to Steam). The
+first must stand. The second must not cost a playing user their session on a server that does not
+derive authority from Steam in the first place.
+
+⚠ THIS SERVER RUNS ReUnion. Non-Steam clients are accepted BY DESIGN — that is the entire reason
+the self-hosted Sven server exists (deploy/svencoop-server/README.md). Identity comes from
+ReUnion, not from Steam. So a Steam-side connectivity failure is, for us, information — not
+grounds to eject somebody mid-game while every non-Steam player beside them keeps playing. Left
+as it was, a legitimate Steam owner gets a WORSE experience on this server than a non-Steam
+client, which is precisely backwards.
+
+⚠ NOT in this list, deliberately, and do not add them: Cheater (VAC), NoLicense, InvalidVersion,
+IncompatibleAnticheat, IncompatibleSoftware, MemoryCorruption. Those are verdicts about the
+client and are still enforced in full.
+=================
+*/
+static bool SV_Steam3DenyIsTransient(EDenyReason eDenyReason)
+{
+	switch (eDenyReason)
+	{
+	case k_EDenySteamConnectionError:
+	case k_EDenySteamConnectionLost:
+	case k_EDenySteamResponseTimedOut:
+	case k_EDenyNotLoggedOn:
+		return true;
+	default:
+		return false;
+	}
+}
+#endif // REHLDS_SVEN
+
 void CSteam3Server::OnGSClientDenyHelper(client_t *cl, EDenyReason eDenyReason, const char *pchOptionalText)
 {
+#ifdef REHLDS_SVEN
+	// One line that says everything the old log did not: which reason, numerically and by name,
+	// for whom, and with whatever text Steam attached. Print it for EVERY deny, kept or not.
+	Con_Printf("[steam3] client deny: reason=%d (%s) client=\"%s\" id=%s%s%s\n",
+		(int)eDenyReason, SV_Steam3DenyReasonName(eDenyReason),
+		cl ? cl->name : "<none>",
+		cl ? SV_GetClientIDString(cl) : "<none>",
+		(pchOptionalText && *pchOptionalText) ? " text=" : "",
+		(pchOptionalText && *pchOptionalText) ? pchOptionalText : "");
+
+	if (cl && sv_rehlds_sven_tolerate_steam_deny.value > 0.f && SV_Steam3DenyIsTransient(eDenyReason))
+	{
+		// Keep the client. See SV_Steam3DenyIsTransient for why this is correct on a ReUnion
+		// server and why the client-verdict reasons are deliberately excluded from it.
+		Con_Printf("[steam3] keeping \"%s\" connected: %s is a Steam-side connectivity result, not a "
+			"verdict about the player, and this server authenticates through ReUnion "
+			"(sv_rehlds_sven_tolerate_steam_deny 0 to restore the drop)\n",
+			cl->name, SV_Steam3DenyReasonName(eDenyReason));
+		return;
+	}
+#endif // REHLDS_SVEN
+
 	switch (eDenyReason)
 	{
 	case k_EDenyInvalidVersion:

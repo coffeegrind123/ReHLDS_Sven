@@ -45,7 +45,24 @@ init()
 		BRANCH_NAME=master
 	fi
 
-	COMMIT_COUNT=$(git -C "$GIT_DIR/" rev-list --count $BRANCH_NAME)
+	# Track the upstream ReHLDS build number rather than our own.
+	#
+	# The build number is a commit count, so counting from our HEAD would report a
+	# higher number than the upstream release this fork is actually based on. When
+	# rehlds/version/upstream_base names a resolvable commit, count from there so the
+	# reported version matches upstream exactly. Otherwise fall back to HEAD.
+	UPSTREAM_BASE_FILE=$SOURCE_DIR/rehlds/version/upstream_base
+	COUNT_FROM=$BRANCH_NAME
+	if [ -e "$UPSTREAM_BASE_FILE" ]; then
+		UPSTREAM_BASE=$(grep -v '^[[:space:]]*#' "$UPSTREAM_BASE_FILE" | tr -d ' \t\r\n')
+		if [ -n "$UPSTREAM_BASE" ] && git -C "$GIT_DIR/" rev-parse --verify --quiet "$UPSTREAM_BASE^{commit}" > /dev/null; then
+			COUNT_FROM=$UPSTREAM_BASE
+		else
+			echo "appversion: upstream_base '$UPSTREAM_BASE' not resolvable, counting from $BRANCH_NAME"
+		fi
+	fi
+
+	COMMIT_COUNT=$(git -C "$GIT_DIR/" rev-list --count $COUNT_FROM)
 	if [ $? -ne 0 -o "$COMMIT_COUNT" = "" ]; then
 		COMMIT_COUNT=0
 	fi

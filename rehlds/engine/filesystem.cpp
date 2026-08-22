@@ -333,7 +333,20 @@ int FileSystem_SetGameDirectory(const char *pDefaultDir, const char *pGameDir)
 	if (!g_bIsDedicatedServer && !IsGameSubscribed(pGameDir))
 		return 0;
 
-	CRehldsPlatformHolder::get()->SteamAPI_SetBreakpadAppID(GetGameAppID());
+	// LOCAL PATCH (cs16 / svencoop-server): honour -nobreakpad here too.
+	//
+	// sys_dll2.cpp already guards SteamAPI_UseBreakpadCrashHandler with -nobreakpad, but
+	// this call was unconditional — so -nobreakpad still dragged in Steam's breakpad path.
+	// On a modern glibc that path aborts the process before it ever opens a UDP listener:
+	//     Fatal glibc error: malloc assertion failure in sysmalloc:
+	//       (old_top == initial_top(av) && old_size == 0) || (... prev_inuse(old_top) ...)
+	// Reproduced with AND without steamclient.so present, i.e. it is the breakpad/Steam
+	// init path itself, not a missing library. A non-Steam server (ours, behind ReUnion)
+	// has no use for Steam crash reporting at all.
+	if (!COM_CheckParm("-nobreakpad"))
+	{
+		CRehldsPlatformHolder::get()->SteamAPI_SetBreakpadAppID(GetGameAppID());
+	}
 
 	bool bEnableHDPack = BEnabledHDAddon();
 	bool bLanguage = (Q_strlen(language) != 0 && Q_stricmp(language, "english")) ? true : false;
