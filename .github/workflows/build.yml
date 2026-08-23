@@ -13,6 +13,17 @@ on:
     types: [published]
   workflow_dispatch:
 
+# The plugin host bundled into gamedir/ is metamod-fallguys (hzqst/metamod-fallguys), a
+# metamod-p fork whose declared target is Sven Co-op. It replaced Metamod-R on 2026-08-23.
+#
+# ⚠ ONE ref for BOTH halves, and it must stay that way. The Linux binary is BUILT FROM
+# SOURCE in the `linux` job (see there for why the published .so is unusable) while the
+# Windows binary comes from a release asset. Pinning those two independently ships a
+# gamedir/ whose halves were built from different source, and nothing downstream would
+# notice. A TAG is used rather than a commit because only a tag has release assets.
+env:
+  MMFG_REF: 'v20260730a'
+
 jobs:
   windows:
     name: 'Windows'
@@ -257,6 +268,7 @@ jobs:
             build-essential \
             libc6-dev libc6-dev-i386 \
             git cmake rsync \
+            ca-certificates \
             g++ gcc
 
       - name: Configure
@@ -340,6 +352,79 @@ jobs:
         run: |
           rm -rf build && cmake -B build && cmake --build build -j8
 
+      # ⚠⚠ BUILT HERE, NOT DOWNLOADED — and upstream's README says the opposite.
+      #
+      # metamod-fallguys claims its makefile forces glibc 2.24 so "the compiled binaries
+      # (.so) are portable now". True of the MAKE path (metamod/Makefile sets GLIBCHEADER,
+      # fed to -include by metamod/Config.mak) and false of what actually ships: its CI runs
+      # scripts/build-all-opt.linux_i386.sh, whose last step is the CMAKE script, and that
+      # script's -DLINK_AGAINST_OLDER_GLIBC=TRUE -DOLDER_GLIBC_PATH=... is a flag NO
+      # CMakeLists.txt in that tree reads. It is silently ignored and the binary inherits
+      # ubuntu-24.04's glibc. Measured on release v20260730a: GLIBC_2.38.
+      #
+      # This job is the only bullseye (GLIBC_2.31) environment in the workflow -- `publish`
+      # is a bare ubuntu-24.04 runner and building there would reproduce the exact bug. So
+      # the .so is built here and travels to `publish` inside the linux32 artifact.
+      #
+      # It lands in publish/plugins/ rather than publish/bin/, because the packaging step
+      # archives `bin/ hlsdk/ gamedir/` by name -- this is a build intermediate that must
+      # reach the bundling step without becoming a release path of its own.
+      - name: Build metamod-fallguys (Linux)
+        run: |
+          set -euo pipefail
+          rm -rf _mmfg
+          git clone --depth 1 --branch "$MMFG_REF" \
+            https://github.com/hzqst/metamod-fallguys.git _mmfg
+          # capstone + procmap only: metamod links both with --whole-archive. bullet3 is
+          # needed solely by the `fallguys` plugin, which this overlay does not ship.
+          git -C _mmfg submodule update --init --recursive \
+            thirdparty/capstone_fork thirdparty/procmap_fork
+          cd _mmfg
+          # These two install prefixes are HARDCODED in metamod-fallguys' top-level
+          # CMakeLists.txt as thirdparty/install/<lib>/opt.linux_i386, where the
+          # `opt.linux_i386` half is derived from CMAKE_BUILD_TYPE != Debug. Changing the
+          # build type moves the prefix and the metamod link then fails to find them.
+          cmake -S thirdparty/procmap_fork -B thirdparty/build/procmap/opt.linux_i386 \
+            -DCMAKE_INSTALL_PREFIX="$PWD/thirdparty/install/procmap/opt.linux_i386" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-m32 -DCMAKE_CXX_FLAGS=-m32 >/dev/null
+          cmake --build thirdparty/build/procmap/opt.linux_i386 --target install -j"$(nproc)" >/dev/null
+          cmake -S thirdparty/capstone_fork -B thirdparty/build/capstone/opt.linux_i386 \
+            -DCMAKE_INSTALL_PREFIX="$PWD/thirdparty/install/capstone/opt.linux_i386" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-m32 -DCMAKE_CXX_FLAGS=-m32 \
+            -DCAPSTONE_ARCHITECTURE_DEFAULT=FALSE -DCAPSTONE_X86_SUPPORT=TRUE \
+            -DCAPSTONE_BUILD_SHARED=FALSE -DCAPSTONE_BUILD_STATIC=TRUE \
+            -DCAPSTONE_BUILD_CSTOOL=FALSE -DCAPSTONE_BUILD_TESTS=FALSE \
+            -DCAPSTONE_INSTALL=TRUE >/dev/null
+          cmake --build thirdparty/build/capstone/opt.linux_i386 --target install -j"$(nproc)" >/dev/null
+          # --whole-archive needs these to exist as STATIC libs; a missing one fails the
+          # link with a bare -lcapstone/-lprocmap error that names no prefix.
+          for a in thirdparty/install/procmap/opt.linux_i386/lib/libprocmap.a \
+                   thirdparty/install/capstone/opt.linux_i386/lib/libcapstone.a; do
+            [ -f "$a" ] || { echo "FATAL: $a was not produced" >&2; exit 1; }
+          done
+          # Named target, not `--target install`: the top-level install() lists all six
+          # products and would drag in fallguys, hence bullet3.
+          cmake -B build-cmake/opt.linux_i386 -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-cmake/opt.linux_i386 -j"$(nproc)" --target metamod
+          cd ..
+          mkdir -p publish/plugins
+          src=$(find _mmfg/build-cmake/opt.linux_i386/output -name 'metamod.so' -print -quit)
+          [ -n "$src" ] || { echo "FATAL: metamod.so was not produced" >&2; exit 1; }
+          cp "$src" publish/plugins/metamod.so
+          # The engine loads this as a game DLL. Without these entry points it reports only
+          # "Failure to load game DLL", naming neither the symbol nor the file.
+          for s in GiveFnptrsToDll GetEntityAPI2 GetNewDLLFunctions Meta_Query; do
+            grep -aq "$s" publish/plugins/metamod.so \
+              || { echo "FATAL: metamod.so does not export $s" >&2; exit 1; }
+          done
+          # The control for those four: a string that cannot be present must NOT match, or
+          # the greps are matching everything and proved nothing.
+          if grep -aq 'zzz_not_in_any_binary_zzz' publish/plugins/metamod.so; then
+            echo "FATAL: the export probe matches everything" >&2; exit 1
+          fi
+          rm -rf _mmfg
+        shell: bash
+
       - name: Prepare HLSDK
         run: |
           mkdir -p publish/hlsdk
@@ -380,6 +465,11 @@ jobs:
             "publish/bin/linux32/demoplayer.so"
             "publish/bin/linux32/svencoop/dlls/director.so"
             "publish/bin/linux32/filesystem_stdio.so"
+            # metamod.so goes through the SAME gate as the engine binaries, deliberately.
+            # It is the file most likely to regress here -- upstream's published build needs
+            # GLIBC_2.38 and would load on the CI runner while failing on every deployment
+            # target, so "it built" is not evidence. This gate is what makes it evidence.
+            "publish/plugins/metamod.so"
           )
           bash ./rehlds/version/glibc_test.sh ${binaries[@]}
           if [[ $? -ne 0 ]]; then
@@ -438,56 +528,92 @@ jobs:
           fi
           rm -f appversion.h
 
-      - name: Bundle Metamod-R and ReUnion into gamedir/
+      - name: Bundle metamod-fallguys and ReUnion into gamedir/
         env:
           # Pinned, not "latest", so a release is reproducible and we only ever ship
           # plugin versions this stack has actually been run against. Bump deliberately.
-          METAMOD_VERSION: '1.3.0.149'
           REUNION_VERSION: '0.2.0.25'
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          rm -rf _plug gamedir && mkdir -p _plug gamedir/addons/metamod gamedir/addons/reunion
+          rm -rf _plug gamedir && mkdir -p _plug gamedir/addons/metamod/dlls gamedir/addons/reunion
 
-          gh release download "$METAMOD_VERSION" --repo rehlds/Metamod-R --pattern '*.zip' -O _plug/mm.zip
-          gh release download "$REUNION_VERSION" --repo rehlds/reunion    --pattern '*.zip' -O _plug/ru.zip
+          # ⚠ THE TWO HALVES COME FROM DIFFERENT PLACES, AND ONLY ONE IS DOWNLOADABLE.
+          #   linux   -> built from source in the `linux` job (see the long note there:
+          #              the published .so needs GLIBC_2.38 and cannot load on the bullseye
+          #              targets this fork ships for), arriving via the linux32 artifact.
+          #   windows -> the release asset, which has no glibc to be wrong about.
+          # Both are pinned to $MMFG_REF at the workflow level so they cannot drift apart.
+          [ -f plugins/metamod.so ] || {
+            echo "FATAL: plugins/metamod.so missing from the linux32 artifact." >&2
+            echo "       The 'Build metamod-fallguys (Linux)' step in the linux job is what" >&2
+            echo "       produces it; do NOT substitute the upstream release asset here." >&2
+            exit 1; }
+          gh release download "$MMFG_REF" --repo hzqst/metamod-fallguys \
+            --pattern 'metamod-fallguys-windows-x86.zip' -O _plug/mm.zip
+          gh release download "$REUNION_VERSION" --repo rehlds/reunion --pattern '*.zip' -O _plug/ru.zip
           unzip -q _plug/mm.zip -d _plug/mm
           unzip -q _plug/ru.zip -d _plug/ru
 
-          # Metamod-R ships an addons/metamod/ tree already in the right shape.
-          cp _plug/mm/addons/metamod/metamod_i386.so gamedir/addons/metamod/
-          cp _plug/mm/addons/metamod/metamod.dll     gamedir/addons/metamod/
+          # ⚠ metamod-fallguys lives in addons/metamod/DLLS/, not addons/metamod/ as
+          # Metamod-R did. Whatever writes liblist.gam downstream must point at
+          # "addons/metamod/dlls/metamod.so" -- this overlay does not ship liblist.gam,
+          # so that path change does NOT propagate on its own.
+          cp plugins/metamod.so                       gamedir/addons/metamod/dlls/
+          cp _plug/mm/build/addons/metamod/dlls/metamod.dll gamedir/addons/metamod/dlls/
           # ReUnion ships flat bin/<platform>/ instead.
           cp _plug/ru/bin/Linux/reunion_mm_i386.so   gamedir/addons/reunion/
           cp _plug/ru/bin/Windows/reunion_mm.dll     gamedir/addons/reunion/
 
           # Metamod must be told the REAL game library: liblist.gam points at Metamod,
           # so without this it would recurse into itself.
-          # gamedll_linux is the REAL game library; liblist.gam points at Metamod itself,
-          # so without this line Metamod would recurse into itself.
           #
-          # ⚠ DO NOT add a bare `gamedll` line here. Metamod-r applies it over
-          # gamedll_linux on Linux too, so the server then tries to load the WINDOWS
-          # dlls\server.dll and dies with "FATAL ERROR (shutting down): Failure to load
-          # game DLL" -- printed AFTER Metamod's full banner, so it reads as a Metamod
-          # fault and is not. Measured 2026-08-17: adding the line broke a tree that was
-          # otherwise byte-identical to a working one, and removing it fixed it.
-          # Windows deployments should uncomment the line below instead.
+          # ⚠⚠ THE KEY IS `gamedll`, AND THIS INVERTS WHAT THIS FILE SAID UNTIL 2026-08-23.
+          # Under Metamod-R a bare `gamedll` line was HARMFUL: it was applied over
+          # gamedll_linux on Linux too, so the server tried to load dlls\server.dll and died
+          # with "Failure to load game DLL" after Metamod's full banner. metamod-fallguys is
+          # metamod-p derived and its option table (metamod/metamod.cpp, global_options[])
+          # has exactly ONE entry -- {"gamedll", CF_PATH, ...}. There is no gamedll_linux and
+          # no gamedll_win32; the old key is simply unrecognised.
+          #
+          # ⚠ And an unrecognised key does NOT fail: MConfig::set() returns ME_NOTFOUND,
+          # metamod warns once, then `autodetect yes` (the default) resolves the game DLL
+          # from metamod/games.h, which carries {"svencoop", "server.so", "server.dll", ...}.
+          # So a stale gamedll_linux line still boots a working server, via a silent
+          # fallback, until a gamedir or a games.h entry changes. Hence: set it explicitly.
+          #
+          # CF_PATH resolves through full_gamedir_path(), i.e. relative to the gamedir.
+          # Windows deployments comment the linux line and uncomment the windows one --
+          # one key means the per-OS choice has to be made in the file.
           cat > gamedir/addons/metamod/config.ini <<'EOF'
-          // Metamod-R config. gamedll_linux is the REAL game library; liblist.gam points
-          // at Metamod itself, so without this line Metamod would recurse into itself.
+          // metamod-fallguys (metamod-p) config. gamedll is the REAL game library;
+          // liblist.gam points at metamod itself, so without this line metamod would
+          // recurse into itself.
           //
-          // Windows: uncomment the next line. Do NOT leave it uncommented on Linux --
-          // it overrides gamedll_linux and the server fails to load the game DLL.
+          // The key is `gamedll` on BOTH platforms -- metamod-p has no gamedll_linux /
+          // gamedll_win32. (Metamod-R did, and warned against a bare `gamedll`; that
+          // warning is inverted here and does not apply to this metamod.)
+          //
+          // Windows: comment the line below and uncomment this one instead.
           //gamedll dlls\server.dll
-          gamedll_linux dlls/server.so
+          gamedll dlls/server.so
           EOF
 
           # ReUnion MUST load first: it intercepts the connect/auth path, so anything
           # loaded before it would see clients it would have rejected.
+          #
+          # ⚠ ReUnion declares interface 5:13 and this metamod is 5:16. mplugin.cpp accepts
+          # same-major/older-minor, so it loads and logs "using an older interface version
+          # (5:13), not the latest (5:16)". That line is a NOTE, not a failure.
+          #
+          # ⚠ And unlike Metamod-R, this metamod prints NOTHING on a successful plugin load
+          # -- there is no "Read plugin config for: Reunion". A startup-log grep for
+          # "reunion" comes back empty on a perfectly healthy server. `meta list` showing
+          # "[ 1] Reunion  RUN" is the only proof.
           cat > gamedir/addons/metamod/plugins.ini <<'EOF'
-          ; Metamod-R plugin list. ReUnion MUST be first -- it intercepts the connect/auth
-          ; path, so anything loaded before it can see clients it would have rejected.
+          ; metamod-fallguys plugin list. ReUnion MUST be first -- it intercepts the
+          ; connect/auth path, so anything loaded before it can see clients it would
+          ; have rejected.
           linux addons/reunion/reunion_mm_i386.so
           win32 addons\reunion\reunion_mm.dll
           EOF
@@ -551,10 +677,24 @@ jobs:
           chmod +x gamedir/rotate-reunion-salt.sh
 
           # Guard the result rather than trusting the staging above.
-          test -s gamedir/addons/metamod/metamod_i386.so
-          test -s gamedir/addons/metamod/metamod.dll
+          # NOTE the dlls/ subdirectory and the metamod.so name -- both changed with the
+          # move off Metamod-R, and these two lines are what stop the old layout coming
+          # back unnoticed through an edit further up.
+          test -s gamedir/addons/metamod/dlls/metamod.so
+          test -s gamedir/addons/metamod/dlls/metamod.dll
           test -s gamedir/addons/reunion/reunion_mm_i386.so
           test -s gamedir/addons/reunion/reunion_mm.dll
+          # The bundled .so must be the one built on bullseye, not upstream's release. The
+          # linux job's GLIBC gate already covers it, but this overlay is assembled on a
+          # ubuntu-24.04 runner where a hand-substituted release binary would look fine.
+          # An EMPTY match fails too: that is the control, since grep finding nothing would
+          # otherwise read exactly like a pass.
+          mmg=$(grep -ao 'GLIBC_2\.[0-9]*' gamedir/addons/metamod/dlls/metamod.so | sort -uV | tail -1)
+          [ -n "$mmg" ] || { echo "FATAL: no GLIBC_* in bundled metamod.so -- probe broken" >&2; exit 1; }
+          [ "$(printf '%s\n%s\n' "$mmg" "GLIBC_2.31" | sort -V | tail -1)" = "GLIBC_2.31" ] \
+            || { echo "FATAL: bundled metamod.so requires $mmg; deployment targets supply GLIBC_2.31." >&2
+                 echo "       This is upstream's release asset, not the bullseye build." >&2; exit 1; }
+          echo "ok: bundled metamod.so requires at most $mmg"
           grep -qE '^cid_NoSteam47 = 3' gamedir/reunion.cfg || { echo "FATAL: cid_NoSteam47 not 3 (5 = DROP)" >&2; exit 1; }
           grep -qE '^cid_NoSteam48 = 3' gamedir/reunion.cfg || { echo "FATAL: cid_NoSteam48 not 3 (5 = DROP)" >&2; exit 1; }
           grep -qE '^SteamIdHashSalt = GENERATE_ON_FIRST_RUN$' gamedir/reunion.cfg || { echo "FATAL: salt sentinel not written; the engine would not localise it and ReUnion would fail to init" >&2; exit 1; }
