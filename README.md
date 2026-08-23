@@ -24,7 +24,7 @@ Along with reverse engineering, a lot of defects and (potential) bugs were found
 | | |
 |---|---|
 | **Sven Co-op protocol** | Protocol 48 as Svengine speaks it: widened user messages, long-encoded coords and fragment headers, raised `qlimits`, no packet munging, Sven's consistency/delta framing |
-| **Ready-to-run plugin stack** | Releases bundle [Metamod-R](https://github.com/rehlds/Metamod-R) + [ReUnion](https://github.com/rehlds/reunion) in a `gamedir/` tree, configured to accept non-Steam clients |
+| **Ready-to-run plugin stack** | Releases bundle [metamod-fallguys](https://github.com/hzqst/metamod-fallguys) + [ReUnion](https://github.com/rehlds/reunion) in a `gamedir/` tree, configured to accept non-Steam clients |
 | **Automatic ReUnion salt** | The engine generates a per-server `SteamIdHashSalt` on first run and preserves it across upgrades |
 | **Sven-specific cvars** | `sv_rehlds_sven_block_game_bans`, `sv_rehlds_sven_tolerate_steam_deny`, `sv_rehlds_maxusrcmdprocessticks`, `sv_rehlds_force_allow_lagcompensation`, `sv_log_daily` |
 | **Retail `server.so` fixes** | Recovers from the unterminated `MESSAGE_BEGIN` that killed servers ~30x/day, fixes a `DELTA_ParseDelta` stack overflow, honours `-nobreakpad` |
@@ -140,12 +140,24 @@ non-Steam server needs, already wired up:
 
 | path | what |
 |---|---|
-| `addons/metamod/metamod_i386.so`, `metamod.dll` | [Metamod-R](https://github.com/rehlds/Metamod-R) `1.3.0.149` |
-| `addons/metamod/config.ini` | points Metamod at the real game library |
+| `addons/metamod/dlls/metamod.so`, `metamod.dll` | [metamod-fallguys](https://github.com/hzqst/metamod-fallguys) `1.21p38` — note the `dlls/` subdirectory |
+| `addons/metamod/config.ini` | points metamod at the real game library (key: `gamedll`) |
 | `addons/metamod/plugins.ini` | plugin list, ReUnion first |
 | `addons/reunion/reunion_mm_i386.so`, `reunion_mm.dll` | [ReUnion](https://github.com/rehlds/reunion) `0.2.0.25` |
 | `reunion.cfg` | ReUnion config, **non-Steam clients accepted** |
 | `rotate-reunion-salt.sh` | forces a new `SteamIdHashSalt` (see below) |
+
+> [!WARNING]
+> **The metamod binary is at `addons/metamod/dlls/metamod.so`**, not `addons/metamod/metamod_i386.so`
+> as it was under Metamod-R (changed 2026-08-23). This overlay does **not** ship `liblist.gam`,
+> so whatever writes it on your side must point at the new path — the change does not propagate
+> on its own, and getting it wrong yields `Failure to load game DLL` with no mention of the path.
+>
+> Two more differences worth knowing before you debug a healthy server:
+> `meta version` reports `Metamod-P (mm-p)` / `1.21p38` (a `1.3.x` means an old overlay), and
+> **this metamod prints nothing on a successful plugin load** — there is no
+> `Read plugin config for: Reunion`, so a startup-log grep for `reunion` is empty even when it
+> is running. `meta list` showing `[ 1] Reunion  RUN` is the only proof.
 
 > [!IMPORTANT]
 > ReUnion ships `cid_NoSteam47 = 5` and `cid_NoSteam48 = 5` by default, and `5` means
@@ -343,9 +355,24 @@ for further releases on the same upstream base and resets after a rebase.
 
 ### Bundled plugin versions
 
-Metamod-R and ReUnion are **pinned** in `.github/workflows/build.yml` (`METAMOD_VERSION`,
-`REUNION_VERSION`) rather than tracking "latest", so a release is reproducible and only
-ships versions this stack has actually been run against. Bump them deliberately.
+metamod-fallguys and ReUnion are **pinned** in `.github/workflows/build.yml` (`MMFG_REF` at
+the workflow level, `REUNION_VERSION` in the bundling step) rather than tracking "latest", so
+a release is reproducible and only ships versions this stack has actually been run against.
+Bump them deliberately.
+
+`MMFG_REF` is one ref for **both** halves of metamod, and that is load-bearing. The Linux
+`.so` is **built from source** in the `linux` job; the Windows `.dll` comes from that ref's
+release asset. Pinning them separately would ship a `gamedir/` whose halves were built from
+different source, and nothing downstream would notice.
+
+⚠ The Linux binary cannot be downloaded, and upstream's README says otherwise. It claims the
+makefile forces glibc 2.24 so the shipped `.so` is portable — true of the *make* path, false
+of what ships, because metamod-fallguys' own CI ends on its **cmake** script and
+`-DLINK_AGAINST_OLDER_GLIBC=TRUE` is a flag no `CMakeLists.txt` in that tree reads. Measured
+on release `v20260730a`: **`GLIBC_2.38`**, against deployment targets that supply `GLIBC_2.31`.
+So it is compiled in the `linux` job (the only bullseye environment here — `publish` is a bare
+`ubuntu-24.04` runner where building would reproduce the bug exactly) and routed through the
+same `glibc_test.sh` gate as the engine binaries.
 
 The packaging step derives `reunion.cfg` from ReUnion's *own* shipped config for the pinned
 version and changes only the authid policy, so it does not go stale against a bump. It then
