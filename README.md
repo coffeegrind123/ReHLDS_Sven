@@ -370,9 +370,16 @@ makefile forces glibc 2.24 so the shipped `.so` is portable — true of the *mak
 of what ships, because metamod-fallguys' own CI ends on its **cmake** script and
 `-DLINK_AGAINST_OLDER_GLIBC=TRUE` is a flag no `CMakeLists.txt` in that tree reads. Measured
 on release `v20260730a`: **`GLIBC_2.38`**, against deployment targets that supply `GLIBC_2.31`.
-So it is compiled in the `linux` job (the only bullseye environment here — `publish` is a bare
-`ubuntu-24.04` runner where building would reproduce the bug exactly) and routed through the
-same `glibc_test.sh` gate as the engine binaries.
+So it is compiled in the `linux` job — the only bullseye environment here; `publish` is a bare
+`ubuntu-24.04` runner where building would reproduce the bug exactly — and its glibc floor is
+asserted before it is uploaded.
+
+⚠ That assertion is **separate from `glibc_test.sh`**, on a deliberately different threshold.
+The engine's script hardcodes `GLIBC 2.11`, which is upstream ReHLDS's portability target for
+ancient distros; metamod-fallguys cannot meet it (its own release needs 2.38, and even the
+glibc-forcing path its README describes targets 2.24). The number that matters for this fork
+is the documented runtime, bullseye = **2.31**. Do not reconcile the two by lowering
+`glibc_test.sh` — that weakens the *engine's* guarantee to accommodate a plugin.
 
 The packaging step derives `reunion.cfg` from ReUnion's *own* shipped config for the pinned
 version and changes only the authid policy, so it does not go stale against a bump. It then
