@@ -465,16 +465,50 @@ jobs:
             "publish/bin/linux32/demoplayer.so"
             "publish/bin/linux32/svencoop/dlls/director.so"
             "publish/bin/linux32/filesystem_stdio.so"
-            # metamod.so goes through the SAME gate as the engine binaries, deliberately.
-            # It is the file most likely to regress here -- upstream's published build needs
-            # GLIBC_2.38 and would load on the CI runner while failing on every deployment
-            # target, so "it built" is not evidence. This gate is what makes it evidence.
-            "publish/plugins/metamod.so"
           )
           bash ./rehlds/version/glibc_test.sh ${binaries[@]}
           if [[ $? -ne 0 ]]; then
             exit 1 # Assertion failed
           fi
+        shell: bash
+
+      # ⚠⚠ SEPARATE FROM glibc_test.sh ABOVE, AND ON A DIFFERENT THRESHOLD ON PURPOSE.
+      #
+      # metamod.so was briefly added to that script's binary list, which failed:
+      #   Assertion failed: publish/plugins/metamod.so has GLIBC_2.17
+      #                     greater than max version GLIBC_2.11
+      # glibc_test.sh hardcodes GLIBC 2.11 / CXXABI 1.3.5 / GLIBCXX 3.4.15 and takes no
+      # threshold argument. 2.11 is upstream ReHLDS's ENGINE portability target -- it is
+      # about running on ancient distros, not about this fork's deployment targets.
+      #
+      # metamod-fallguys makes no such claim and cannot meet it: its own published build
+      # needs GLIBC_2.38, and even the "portable" glibc-forcing path its README describes
+      # targets 2.24, still above 2.11. Holding it to the engine's number would block the
+      # bundle for no gain. The number that actually matters is the documented runtime,
+      # debian bullseye = GLIBC_2.31, so that is what is asserted here.
+      #
+      # ⚠ Do NOT "fix" a future failure of this step by lowering glibc_test.sh's 2.11 --
+      # that silently weakens the ENGINE's portability guarantee to fit a plugin.
+      #
+      # CXXABI/GLIBCXX are not checked: metamod links -static-libstdc++ -static-libgcc, so
+      # it has no libstdc++ dependency at all (NEEDED is libdl, libc, ld-linux only).
+      - name: Check metamod-fallguys glibc floor
+        run: |
+          set -euo pipefail
+          f=publish/plugins/metamod.so
+          # readelf, not `grep -a`: this runner has binutils, and the version-needs table is
+          # the authority. An EMPTY result fails as the control -- every real binary here
+          # references some GLIBC_*, so "none found" means the probe broke, not that the
+          # binary is clean.
+          max=$(readelf -sW --dyn-syms "$f" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          [ -n "$max" ] || { echo "FATAL: no GLIBC_* in $f -- the probe is broken" >&2; exit 1; }
+          if [ "$(printf '%s\n%s\n' "$max" "GLIBC_2.31" | sort -V | tail -1)" != "GLIBC_2.31" ]; then
+            echo "FATAL: $f requires $max; deployment targets supply GLIBC_2.31." >&2
+            echo "       Either this was not built in the debian:11-slim container, or" >&2
+            echo "       upstream's release asset was substituted for the source build." >&2
+            exit 1
+          fi
+          echo "ok: $f requires at most $max (ceiling GLIBC_2.31)"
         shell: bash
 
       - name: Deploy artifacts
