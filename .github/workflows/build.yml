@@ -352,6 +352,26 @@ jobs:
         run: |
           rm -rf build && cmake -B build && cmake --build build -j8
 
+      # The README promises "the tree still builds as stock ReHLDS with that define
+      # removed from rehlds/CMakeLists.txt". That was an untested claim until a
+      # REHLDS_SVEN-only helper called from unguarded code broke the MSVC "Release Play"
+      # configuration -- the only build in this workflow that had REHLDS_SVEN off, and
+      # only on the other platform. Assert the invariant here, where it is cheap and
+      # fails in the same job as the code that breaks it.
+      - name: Build as stock ReHLDS (REHLDS_SVEN off)
+        run: |
+          sed -i '/^\tREHLDS_SVEN$/d' rehlds/CMakeLists.txt
+          # `grep -q X && { exit 1; }` would be wrong here: a NON-match makes the whole
+          # && list return 1, and this shell runs with -e, so the step would fail on the
+          # good path. Use an if, whose condition is exempt from -e.
+          if grep -q 'REHLDS_SVEN' rehlds/CMakeLists.txt; then
+            echo "REHLDS_SVEN is still defined -- the sed above no longer matches"
+            exit 1
+          fi
+          rm -rf build-stock && cmake -B build-stock && cmake --build build-stock -j8
+          git checkout -- rehlds/CMakeLists.txt
+        shell: bash
+
       # ⚠⚠ BUILT HERE, NOT DOWNLOADED — and upstream's README says the opposite.
       #
       # metamod-fallguys claims its makefile forces glibc 2.24 so "the compiled binaries

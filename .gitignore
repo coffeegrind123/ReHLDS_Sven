@@ -1,5 +1,6 @@
 **/build
 build-ut*/
+build-stock/
 *.iml
 *.bat
 *.log
