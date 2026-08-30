@@ -85,6 +85,19 @@ sizebuf_t gMsgBuffer = { "MessageBegin/End", 0, gMsgData, sizeof(gMsgData), 0 };
 static int gMsgCoordOffsets[MAX_USER_MSG_DATA / 4];
 static int gMsgCoordCount;
 
+// Is this message id a game-DLL user message, rather than an engine svc the
+// game DLL happens to send through MESSAGE_BEGIN (svc_temp_entity,
+// svc_roomtype, ...)? Only the former carries a length prefix. Mirrors the
+// comparison used elsewhere in this file, which REHLDS_FIXES shifts by one.
+static inline bool SV_IsUserMessageType(int msgType)
+{
+#ifdef REHLDS_FIXES
+	return msgType >= svc_startofusermessages;
+#else
+	return msgType > svc_startofusermessages;
+#endif
+}
+
 // The buffers one shared-destination write has to be composed into: the native
 // one, and its Half-Life twin when it has one. Terminated by a null entry, so
 // callers are a plain `for (int i = 0; pass[i]; i++)`.
@@ -2476,17 +2489,48 @@ void EXT_FUNC PF_MessageBegin_I(int msg_dest, int msg_type, const float *pOrigin
 		// nothing on the wire to corrupt. The cost is one lost usermessage; the
 		// alternative is losing the server.
 		//
-		// The name is logged, not just the id, because the id alone is not identifying:
-		// usermessage numbers are assigned in registration order and differ per game.
-		UserMsg *pLeaked = sv_gpUserMsgs;
-		while (pLeaked && pLeaked->iMsg != gMsgType)
-			pLeaked = pLeaked->next;
+		// ⚠ NOT every unterminated message is a leak worth reporting.
+		//
+		// Retail Sven's server.so also opens messages with a NEGATIVE destination
+		// and deliberately never ends them -- measured at ~5.3/sec, steadily, on an
+		// idle server. There is no delivery path for such a message: WriteDest_Parm
+		// has no case below MSG_BROADCAST and would Host_Error if one ever reached
+		// MessageEnd, so the game DLL is using it as a write-to-nowhere sink and the
+		// discard below is exactly what it is asking for. Reporting that as a fault
+		// produced ~320 identical console lines a minute (~70 MB of log a day), which
+		// buries every message that does matter -- including the real leaks this
+		// warning exists to surface.
+		//
+		// So: discard both, report only the one that is actually anomalous.
+		if (gMsgDest >= 0)
+		{
+			// The name is logged, not just the id, because the id alone is not identifying:
+			// usermessage numbers are assigned in registration order and differ per game.
+			UserMsg *pLeaked = sv_gpUserMsgs;
+			while (pLeaked && pLeaked->iMsg != gMsgType)
+				pLeaked = pLeaked->next;
 
-		Con_Printf("%s: discarding unterminated msg '%d' (%s, dest %d, %d bytes) started by "
-		           "the game DLL without a matching MESSAGE_END; recovering instead of "
-		           "shutting down\n",
-		           __func__, gMsgType, pLeaked ? pLeaked->szName : "unregistered",
-		           gMsgDest, gMsgBuffer.cursize);
+			// Rate-limited regardless: a repeating leak is one fact, not thousands.
+			static double s_lastLeakReport = 0.0;
+			static unsigned s_leakSuppressed = 0;
+
+			if (realtime - s_lastLeakReport >= 60.0)
+			{
+				Con_Printf("%s: discarding unterminated msg '%d' (%s, dest %d, %d bytes) started by "
+				           "the game DLL without a matching MESSAGE_END; recovering instead of "
+				           "shutting down%s\n",
+				           __func__, gMsgType, pLeaked ? pLeaked->szName : "unregistered",
+				           gMsgDest, gMsgBuffer.cursize,
+				           s_leakSuppressed ? va(" (%u similar suppressed in the last minute)", s_leakSuppressed) : "");
+
+				s_lastLeakReport = realtime;
+				s_leakSuppressed = 0;
+			}
+			else
+			{
+				s_leakSuppressed++;
+			}
+		}
 
 		gMsgStarted = FALSE;
 		gMsgEntity = NULL;
@@ -2579,31 +2623,47 @@ void WriteMessageToBuffer(qboolean isVariableLengthMsg, sizebuf_t *buf)
 
 	if (destIsHL)
 	{
-		// Half-Life clients are told every user message is variable-length
-		// (SV_SendUserReg), because narrowing coordinates changes the payload
-		// length while the size advertised at signon describes the wide layout.
-		isVariableLengthMsg = TRUE;
-
+		// Coordinates narrow for EVERY message, not just user messages: the
+		// game DLL writes temp entities through the same WRITE_COORD, and
+		// svc_temp_entity is where most of them are.
 		if (gMsgCoordCount > 0)
 		{
 			payloadLen = PF_NarrowUserMsgForHL(narrowed, sizeof(narrowed));
 			if (payloadLen < 0)
 			{
-				Con_DPrintf("%s: user msg %d could not be narrowed for a Half-Life client\n",
+				Con_DPrintf("%s: msg %d could not be narrowed for a Half-Life client\n",
 					__func__, gMsgType);
 				return;
 			}
 			payload = narrowed;
 		}
 
-		if (payloadLen > 255)
+		// The length prefix, however, belongs ONLY to user messages.
+		//
+		// The game DLL also sends plain engine messages through MESSAGE_BEGIN
+		// -- svc_temp_entity and svc_roomtype most of all -- and those have no
+		// length field at all: the client knows their shape and reads it
+		// directly. Forcing one on injects a byte the client never consumes,
+		// and the stream desyncs at exactly that message. Measured: a stock
+		// Half-Life client parsed the signon fine up to svc_roomtype and then
+		// died on the next read with `Illegible server message - svc_bad`.
+		if (SV_IsUserMessageType(gMsgType))
 		{
-			// The length prefix is one byte in that dialect, so there is no
-			// framing for this message at all. Dropping it keeps the stream
-			// aligned; sending a truncated length would not.
-			Con_DPrintf("%s: user msg %d is %d bytes, too large for a Half-Life client\n",
-				__func__, gMsgType, payloadLen);
-			return;
+			// Half-Life clients are told every user message is variable-length
+			// (SV_SendUserReg), because narrowing coordinates changes the
+			// payload length while the size advertised at signon describes the
+			// wide layout.
+			isVariableLengthMsg = TRUE;
+
+			if (payloadLen > 255)
+			{
+				// The length prefix is one byte in that dialect, so there is no
+				// framing for this message at all. Dropping it keeps the stream
+				// aligned; sending a truncated length would not.
+				Con_DPrintf("%s: user msg %d is %d bytes, too large for a Half-Life client\n",
+					__func__, gMsgType, payloadLen);
+				return;
+			}
 		}
 	}
 #endif // REHLDS_SVEN
@@ -2669,6 +2729,20 @@ void EXT_FUNC PF_MessageEnd_I(void)
 		Sys_Error("%s: called with no active message\n", __func__);
 
 	gMsgStarted = FALSE;
+
+#ifdef REHLDS_SVEN
+	// A negative destination has no delivery path (see PF_MessageBegin_I). The
+	// game DLL normally abandons these rather than ending them, but if one ever
+	// does arrive here, discard it: WriteDest_Parm's default is Host_Error, and
+	// taking the server down over a message the DLL addressed to nowhere would
+	// be a worse answer than dropping it.
+	if (gMsgDest < 0)
+	{
+		gMsgBuffer.cursize = 0;
+		gMsgCoordCount = 0;
+		return;
+	}
+#endif
 
 	if (gMsgEntity && (gMsgEntity->v.flags & FL_FAKECLIENT))
 		return;
