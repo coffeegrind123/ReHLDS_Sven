@@ -755,6 +755,12 @@ void NET_FlushSocket(netsrc_t sock)
 	}
 }
 
+// NOTE (REHLDS_SVEN): this parses the split header in the NATIVE layout only.
+// That is not an oversight -- with REHLDS_FIXES, NET_QueuePacket refuses split
+// packets addressed to NS_SERVER outright ("Someone tries to send split packet
+// to the server"), because there is no server<->server traffic, so a dedicated
+// server never reaches this with client data. Only NET_SendLong, the emitting
+// side, has to speak both.
 qboolean NET_GetLong(unsigned char *pData, int size, int *outSize)
 {
 	static int gNetSplitFlags[NET_WS_MAX_FRAGMENTS];
@@ -1325,8 +1331,30 @@ int NET_SendLong(netsrc_t sock, SOCKET s, const char *buf, int len, int flags, c
 
 		char packet[MAX_ROUTEABLE_PACKET];
 		SPLITPACKET *pPacket = (SPLITPACKET *)packet;
-		pPacket->netID = NET_HEADER_FLAG_SPLITPACKET;
-		pPacket->sequenceNumber = gSequenceNumber;
+
+#ifdef REHLDS_SVEN
+		netadr_t splitAdr;
+		Q_memset(&splitAdr, 0, sizeof(splitAdr));
+		SockadrToNetadr((struct sockaddr *)to, &splitAdr);
+
+		SPLITPACKET_HL *pPacketHL = (SPLITPACKET_HL *)packet;
+		const bool splitIsHL = (SV_Proto_DialectOfAddress(&splitAdr) == PROTO_DIALECT_HL);
+		const size_t splitHeaderSize = splitIsHL ? sizeof(SPLITPACKET_HL) : sizeof(SPLITPACKET);
+
+		if (splitIsHL)
+		{
+			pPacketHL->netID = NET_HEADER_FLAG_SPLITPACKET;
+			pPacketHL->sequenceNumber = gSequenceNumber;
+		}
+		else
+#else
+		const size_t splitHeaderSize = sizeof(SPLITPACKET);
+#endif
+		{
+			pPacket->netID = NET_HEADER_FLAG_SPLITPACKET;
+			pPacket->sequenceNumber = gSequenceNumber;
+		}
+
 		int packetNumber = 0;
 		int totalSent = 0;
 		int packetCount = (len + SPLIT_SIZE - 1) / SPLIT_SIZE;
@@ -1336,12 +1364,15 @@ int NET_SendLong(netsrc_t sock, SOCKET s, const char *buf, int len, int flags, c
 			int size = Q_min(int(SPLIT_SIZE), len);
 
 #ifdef REHLDS_SVEN
-			pPacket->packetID = (packetNumber << 8) + packetCount;
+			if (splitIsHL)
+				pPacketHL->packetID = (unsigned char)((packetNumber << 4) + packetCount);
+			else
+				pPacket->packetID = (packetNumber << 8) + packetCount;
 #else //!REHLDS_SVEN
 			pPacket->packetID = (packetNumber << 4) + packetCount;
 #endif //REHLDS_SVEN
 
-			Q_memcpy(packet + sizeof(SPLITPACKET), buf + (packetNumber * SPLIT_SIZE), size);
+			Q_memcpy(packet + splitHeaderSize, buf + (packetNumber * SPLIT_SIZE), size);
 
 			if (net_showpackets.value == 4.0f)
 			{
@@ -1358,7 +1389,7 @@ int NET_SendLong(netsrc_t sock, SOCKET s, const char *buf, int len, int flags, c
 					NET_AdrToString(adr));
 			}
 
-			int ret = CRehldsPlatformHolder::get()->sendto(s, packet, size + sizeof(SPLITPACKET), flags, to, tolen);
+			int ret = CRehldsPlatformHolder::get()->sendto(s, packet, size + splitHeaderSize, flags, to, tolen);
 			if (ret < 0)
 			{
 				return ret;

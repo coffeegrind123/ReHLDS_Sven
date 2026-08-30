@@ -122,6 +122,11 @@ const int MAX_MSGLEN		= 3990; // 10 reserved for fragheader?
 // Max length of unreliable message
 #ifdef REHLDS_SVEN
 const int MAX_DATAGRAM = 65000;
+
+// What a stock Half-Life client will accept. Buffers are sized for the Sven
+// figure (it is the larger, and the server has to be able to compose one), but
+// anything actually addressed to a Half-Life client is capped at this.
+const int HL_MAX_DATAGRAM = 4000;
 #else //!REHLDS_SVEN
 const int MAX_DATAGRAM = 4000;
 #endif //REHLDS_SVEN

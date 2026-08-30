@@ -111,9 +111,10 @@ void SV_ParseConsistencyResponse(client_t *pSenderClient)
 		return;
 	}
 
-#ifndef REHLDS_SVEN
+#ifdef REHLDS_SVEN
+	if (SV_Proto_ClientIsHL(host_client))
+#endif //REHLDS_SVEN
 	COM_UnMunge(&net_message.data[msg_readcount], value, g_psvs.spawncount);
-#endif //!REHLDS_SVEN
 	MSG_StartBitReading(&net_message);
 
 	while (MSG_ReadBits(1))
@@ -148,9 +149,10 @@ void SV_ParseConsistencyResponse(client_t *pSenderClient)
 			MSG_ReadBitData(cmins, 12);
 			MSG_ReadBitData(cmaxs, 12);
 			Q_memcpy(resbuffer, r->rguc_reserved, sizeof(resbuffer));
-#ifndef REHLDS_SVEN
+#ifdef REHLDS_SVEN
+			if (SV_Proto_ClientIsHL(host_client))
+#endif //REHLDS_SVEN
 			COM_UnMunge(resbuffer, sizeof(resbuffer), g_psvs.spawncount);
-#endif //!REHLDS_SVEN
 			FORCE_TYPE ft = (FORCE_TYPE)resbuffer[0];
 			if (ft == force_model_samebounds)
 			{
@@ -377,9 +379,11 @@ void SV_SendConsistencyList(sizebuf_t *msg)
 			{
 				MSG_WriteBits(0, 1);
 #ifdef REHLDS_SVEN
-				MSG_WriteBits(i, 16);	
+				// LIMIT (Half-Life): this writes the index, not a diff, at 10 bits,
+				// so a non-adjacent consistency index past 1023 cannot be expressed.
+				PROTO_BITS(CONSISTENCY_INDEX, i);
 #else //!REHLDS_SVEN
-				MSG_WriteBits(i, 10);	// LIMIT: Here it write index, not a diff, with resolution of 10 bits. So, it limits not adjacent index to 1023 max.
+				MSG_WriteBits(i, 10);
 #endif //REHLDS_SVEN
 			}
 			else
@@ -1574,8 +1578,14 @@ void SV_ParseStringCommand(client_t *pSenderClient)
 #ifdef REHLDS_SVEN
 void SV_ParseDelta(client_t *pSenderClient)
 {
+	if (SV_Proto_ClientIsHL(host_client))
+	{
+		host_client->delta_sequence = MSG_ReadByte();
+		return;
+	}
+
 	MSG_StartBitReading(&net_message);
-	host_client->delta_sequence = MSG_ReadBits(16);
+	host_client->delta_sequence = MSG_ReadBits(PROTO_BITS_SVEN_DELTA_SEQUENCE);
 	MSG_EndBitReading(&net_message);
 }
 #else //!REHLDS_SVEN
@@ -1668,17 +1678,23 @@ void SV_ParseMove(client_t *pSenderClient)
 	mlen = MSG_ReadByte();
 	cbchecksum = MSG_ReadByte();
 
-#ifndef REHLDS_SVEN // this check doesn't exist in sven at all
-	if (mlen <= 0 || !SZ_HasSpaceToRead(&net_message, mlen))
+#ifdef REHLDS_SVEN
+	// Sven has neither the length check nor the munge here, so the two dialects
+	// disagree about the shape of this block, not just its widths.
+	const bool moveIsHL = SV_Proto_ClientIsHL(host_client);
+	if (moveIsHL)
+#endif //REHLDS_SVEN
 	{
-		msg_badread = TRUE;
-		Con_DPrintf("%s:  %s:%s invalid length: %d\n", __func__, host_client->name, NET_AdrToString(host_client->netchan.remote_address), mlen);
-		SV_DropClient(host_client, FALSE, "Invalid length");
-		return;
-	}
+		if (mlen <= 0 || !SZ_HasSpaceToRead(&net_message, mlen))
+		{
+			msg_badread = TRUE;
+			Con_DPrintf("%s:  %s:%s invalid length: %d\n", __func__, host_client->name, NET_AdrToString(host_client->netchan.remote_address), mlen);
+			SV_DropClient(host_client, FALSE, "Invalid length");
+			return;
+		}
 
-	COM_UnMunge(&net_message.data[placeholder + 1], mlen, host_client->netchan.incoming_sequence);
-#endif //!REHLDS_SVEN
+		COM_UnMunge(&net_message.data[placeholder + 1], mlen, host_client->netchan.incoming_sequence);
+	}
 
 	packetLossByte = MSG_ReadByte();
 	numbackup = MSG_ReadByte();
@@ -1712,17 +1728,19 @@ void SV_ParseMove(client_t *pSenderClient)
 		return;
 	}
 
-#ifndef REHLDS_SVEN
-	cbpktchecksum = COM_BlockSequenceCRCByte(&net_message.data[placeholder + 1], msg_readcount - placeholder - 1, host_client->netchan.incoming_sequence);
-	if (cbpktchecksum != cbchecksum)
+#ifdef REHLDS_SVEN
+	(void)cbpktchecksum; // Sven does not send one; unused for those clients
+	if (moveIsHL)
+#endif //REHLDS_SVEN
 	{
-		Con_DPrintf("Failed command checksum for %s:%s\n", host_client->name, NET_AdrToString(host_client->netchan.remote_address));
-		msg_badread = 1;
-		return;
+		cbpktchecksum = COM_BlockSequenceCRCByte(&net_message.data[placeholder + 1], msg_readcount - placeholder - 1, host_client->netchan.incoming_sequence);
+		if (cbpktchecksum != cbchecksum)
+		{
+			Con_DPrintf("Failed command checksum for %s:%s\n", host_client->name, NET_AdrToString(host_client->netchan.remote_address));
+			msg_badread = 1;
+			return;
+		}
 	}
-#else //REHLDS_SVEN
-	(void)cbpktchecksum; // shut up the compiler about "unused variable"
-#endif //!REHLDS_SVEN
 
 	host_client->packet_loss = packet_loss;
 	if (!g_psv.paused && (g_psvs.maxclients > 1 || !key_dest) && !(sv_player->v.flags & FL_FROZEN))

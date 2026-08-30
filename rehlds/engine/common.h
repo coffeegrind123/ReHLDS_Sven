@@ -143,6 +143,20 @@ float MSG_ReadCoord(void);
 void MSG_WriteCoord(sizebuf_t *sb, const float f);
 void MSG_ReadVec3Coord(sizebuf_t *sb, vec3_t fa);
 void MSG_WriteVec3Coord(sizebuf_t *sb, const vec3_t fa);
+
+#ifdef REHLDS_SVEN
+// Per-client protocol dialect (see sv_proto.h). These answer "is the buffer I
+// am currently writing to / reading from destined for a Half-Life client?",
+// which is what selects between the two widths of every field Svengine
+// widened. A buffer with no dialect stamp is native (Sven), so nothing that
+// predates this layer changes behaviour.
+bool MSG_BufIsHL(const sizebuf_t *sb);
+bool MSG_WriteIsHL(void);
+bool MSG_ReadIsHL(void);
+void MSG_WriteBitsProto(uint32 data, int svenbits, int hlbits);
+uint32 MSG_ReadBitsProto(int svenbits, int hlbits);
+#endif // REHLDS_SVEN
+
 void MSG_BeginReading(void);
 int MSG_ReadChar(void);
 int MSG_ReadByte(void);

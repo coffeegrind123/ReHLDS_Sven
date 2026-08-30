@@ -608,7 +608,11 @@ void Host_Status_f(void)
 	Host_Status_Printf(conprint, log, "map     :  %s at: %d x, %d y, %d z\n", g_psv.name, r_origin[0], r_origin[1], r_origin[2]);
 	SV_CountPlayers(&nClients);
 	Host_Status_Printf(conprint, log, "players :  %i active (%i max)\n\n", nClients, g_psvs.maxclients);
+#ifdef REHLDS_SVEN
+	Host_Status_Printf(conprint, log, "#      name userid uniqueid frag time ping loss proto adr\n");
+#else
 	Host_Status_Printf(conprint, log, "#      name userid uniqueid frag time ping loss adr\n");
+#endif
 
 	client = g_psvs.clients;
 	for (j = 0; j < g_psvs.maxclients; j++, client++)
@@ -658,6 +662,12 @@ void Host_Status_f(void)
 		else Host_Status_Printf(conprint, log, " %02i:%02i", minutes, seconds);
 
 		Host_Status_Printf(conprint, log, " %4i  %3i", SV_CalcPing(client), (int)client->packet_loss);
+#ifdef REHLDS_SVEN
+		// Which protocol dialect this player is being served. The whole point
+		// of the dialect layer is that both kinds sit on one server, so an
+		// operator needs to be able to see which is which.
+		Host_Status_Printf(conprint, log, " %5s", SV_Proto_DialectName(SV_Proto_DialectOfClient(client)));
+#endif
 		if ((conprint || client->proxy) && client->netchan.remote_address.type == NA_IP)
 		{
 			Host_Status_Printf(conprint, log, " %s\n", NET_AdrToString(client->netchan.remote_address));

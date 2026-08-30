@@ -843,6 +843,26 @@ qboolean _DELTA_WriteDelta(unsigned char *from, unsigned char *to, qboolean forc
 
 	if (sendfields || force)
 	{
+#ifdef REHLDS_SVEN
+		// A Half-Life client reads the bitmask byte count as 3 bits, so the mask
+		// can never be longer than 7 bytes and it can never be told about a field
+		// past PROTO_HL_MAX_DELTA_FIELDS. Unmark the tail here, before the mask is
+		// built, so the byte count, the mask and DELTA_WriteMarkedFields all agree
+		// without any of them needing to know about the cap.
+		//
+		// Measured against retail Sven Co-op 5.26's svencoop/delta.lst this costs
+		// exactly one field: entity_state_t::gaitsequence, which is #57. Every
+		// other struct in that file is inside the ceiling (clientdata_t 34,
+		// entity_state_player_t 51, weapon_data_t 22, custom_entity_state_t 20,
+		// usercmd_t 15, event_t 14), so Half-Life clients lose leg animation on
+		// non-player entities and nothing else.
+		if (MSG_WriteIsHL() && pFields->fieldCount > PROTO_HL_MAX_DELTA_FIELDS)
+		{
+			for (int f = PROTO_HL_MAX_DELTA_FIELDS; f < pFields->fieldCount; f++)
+				DELTA_UnsetFieldByIndex(pFields, f);
+		}
+#endif // REHLDS_SVEN
+
 #if (defined(REHLDS_OPT_PEDANTIC) || defined(REHLDS_FIXES)) && defined REHLDS_JIT
 		DELTAJit_SetSendFlagBits(pFields, bits, &bytecount);
 #else
@@ -853,7 +873,7 @@ qboolean _DELTA_WriteDelta(unsigned char *from, unsigned char *to, qboolean forc
 			callback();
 
 #ifdef REHLDS_SVEN
-		MSG_WriteBits(bytecount, 4);
+		MSG_WriteBitsProto(bytecount, PROTO_BITS_SVEN_DELTA_BYTECOUNT, PROTO_BITS_HL_DELTA_BYTECOUNT);
 #else //!REHLDS_SVEN
 		MSG_WriteBits(bytecount, 3);
 #endif //REHLDS_SVEN
@@ -904,7 +924,7 @@ int DELTA_ParseDelta(unsigned char *from, unsigned char *to, delta_t *pFields)
 	Q_memset(bits, 0, sizeof(bits));
 
 #ifdef REHLDS_SVEN
-	nbytes = MSG_ReadBits(4);
+	nbytes = MSG_ReadBitsProto(PROTO_BITS_SVEN_DELTA_BYTECOUNT, PROTO_BITS_HL_DELTA_BYTECOUNT);
 #else //!REHLDS_SVEN
 	nbytes = MSG_ReadBits(3);
 #endif //REHLDS_SVEN

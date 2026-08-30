@@ -288,6 +288,14 @@ void Netchan_Transmit(netchan_t *chan, int length, byte *data)
 	sb_send.flags = 0;
 	sb_send.cursize = 0;
 
+#ifdef REHLDS_SVEN
+	// Whether this netchan's peer speaks the Half-Life dialect. Everything the
+	// two disagree about at this layer -- munging, fragment header widths and
+	// the MAX_ROUTEABLE_PACKET cap -- keys off this one answer.
+	const bool chanIsHL = (SV_Proto_DialectOfNetchan(chan) == PROTO_DIALECT_HL);
+	SV_Proto_StampBuffer(&sb_send, chanIsHL ? PROTO_DIALECT_HL : PROTO_DIALECT_SVEN);
+#endif
+
 	// check for message overflow
 	if (chan->message.flags & 2) {
 		Con_Printf("%s:Outgoing message overflow\n", NET_AdrToString(chan->remote_address));
@@ -493,8 +501,16 @@ void Netchan_Transmit(netchan_t *chan, int length, byte *data)
 				MSG_WriteByte(&sb_send, 1);
 				MSG_WriteLong(&sb_send, chan->reliable_fragid[i]);
 #ifdef REHLDS_SVEN
-				MSG_WriteLong(&sb_send, chan->frag_startpos[i]);
-				MSG_WriteLong(&sb_send, chan->frag_length[i]);
+				if (chanIsHL)
+				{
+					MSG_WriteShort(&sb_send, chan->frag_startpos[i]);
+					MSG_WriteShort(&sb_send, chan->frag_length[i]);
+				}
+				else
+				{
+					MSG_WriteLong(&sb_send, chan->frag_startpos[i]);
+					MSG_WriteLong(&sb_send, chan->frag_length[i]);
+				}
 #else //!REHLDS_SVEN
 				MSG_WriteShort(&sb_send, chan->frag_startpos[i]);
 				MSG_WriteShort(&sb_send, chan->frag_length[i]);
@@ -513,17 +529,24 @@ void Netchan_Transmit(netchan_t *chan, int length, byte *data)
 		chan->last_reliable_sequence = chan->outgoing_sequence - 1;
 	}
 
-#ifndef REHLDS_SVEN
+#ifdef REHLDS_SVEN
+	// xWhitey: In Sven, Netchan_TransmitBits, the function doesn't care about
+	// MAX_ROUTABLE_PACKET and send_resending. A Half-Life client does, and
+	// overrunning it there is what produces the classic "Unreliable would
+	// overflow" corruption rather than a dropped payload.
+	int max_send_size = sb_send.maxsize;
+	if (chanIsHL && send_resending)
+		max_send_size = MAX_ROUTEABLE_PACKET;
+
+	if ((max_send_size - sb_send.cursize) >= length)
+#else // !REHLDS_SVEN
 	// Is there room for the unreliable payload?
 	int max_send_size = MAX_ROUTEABLE_PACKET;
 	if (!send_resending)
 		max_send_size = sb_send.maxsize;
 
 	if ((max_send_size - sb_send.cursize) >= length)
-#else // REHLDS_SVEN
-	// xWhitey: In Sven, Netchan_TransmitBits, the function doesn't care about MAX_ROUTABLE_PACKET and send_resending
-	if ((sb_send.maxsize - sb_send.cursize) >= length)
-#endif // !REHLDS_SVEN
+#endif // REHLDS_SVEN
 	{
 		SZ_Write(&sb_send, data, length);
 	}
@@ -550,9 +573,10 @@ void Netchan_Transmit(netchan_t *chan, int length, byte *data)
 
 	if (!g_pcls.demoplayback)
 	{
-#ifndef REHLDS_SVEN
+#ifdef REHLDS_SVEN
+		if (chanIsHL)
+#endif //REHLDS_SVEN
 		COM_Munge2(sb_send.data + 8, sb_send.cursize - 8, (unsigned char)(chan->outgoing_sequence - 1));
-#endif //!REHLDS_SVEN
 
 		if (g_modfuncs.m_pfnProcessOutgoingNet)
 			g_modfuncs.m_pfnProcessOutgoingNet(chan, &sb_send);
@@ -752,9 +776,11 @@ qboolean Netchan_Process(netchan_t *chan)
 	reliable_ack = sequence_ack >> 31;
 	message_contains_fragments = sequence & (1 << 30) ? true : false;
 
-#ifndef REHLDS_SVEN
+#ifdef REHLDS_SVEN
+	const bool chanIsHL = (SV_Proto_DialectOfNetchan(chan) == PROTO_DIALECT_HL);
+	if (chanIsHL)
+#endif //REHLDS_SVEN
 	COM_UnMunge2(&net_message.data[8], net_message.cursize - 8, sequence & 0xFF);
-#endif //!REHLDS_SVEN
 	if (message_contains_fragments)
 	{
 		for (i = 0; i < MAX_STREAMS; i++)
@@ -764,8 +790,16 @@ qboolean Netchan_Process(netchan_t *chan)
 				frag_message[i] = true;
 				fragid[i] = MSG_ReadLong();
 #ifdef REHLDS_SVEN
-				frag_offset[i] = MSG_ReadLong();
-				frag_length[i] = MSG_ReadLong();
+				if (chanIsHL)
+				{
+					frag_offset[i] = MSG_ReadShort();
+					frag_length[i] = MSG_ReadShort();
+				}
+				else
+				{
+					frag_offset[i] = MSG_ReadLong();
+					frag_length[i] = MSG_ReadLong();
+				}
 #else //!REHLDS_SVEN
 				frag_offset[i] = MSG_ReadShort();
 				frag_length[i] = MSG_ReadShort();
