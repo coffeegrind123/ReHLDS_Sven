@@ -10,4 +10,4 @@
 # Update this on every rebase onto a newer upstream, in the same commit that
 # performs the rebase. Blank or unresolvable falls back to counting from HEAD.
 #
-0124d56c3d888d922eb045775f71c6682ad1226f
+6266cd23faee4a6e9cf3974f9605b2cadd86f0a4
