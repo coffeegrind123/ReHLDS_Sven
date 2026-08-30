@@ -1208,16 +1208,44 @@ void SV_SendServerinfo_internal(sizebuf_t *msg, client_t *client)
 	else
 		MSG_WriteByte(msg, 0);
 
-	const char *pszGameDir = message;
+	const char *pszGameDir = nullptr;
 
 #ifdef REHLDS_FIXES
 	// Give the client a chance to connect in to the server with different game
 	const char *gd = Info_ValueForKey(client->userinfo, "_gd");
 	if (gd[0])
 		pszGameDir = gd;
-	else
 #endif
+
+#ifdef REHLDS_SVEN
+	// A stock Half-Life client checks the gamedir CLIENT-side and disconnects
+	// itself with "Server is running game X. Restart in that game to connect."
+	// before it ever spawns -- so a svencoop server is unjoinable from one no
+	// matter how correct the wire is. rehlds/rehlds#975 settled that the only
+	// fix is for the server to report a different gamedir, and concluded it
+	// needed the client to declare its game via setinfo, "but this does not
+	// happen" otherwise. That is what `_gd` above is.
+	//
+	// The dialect probe removes that dependency for this case: the server has
+	// already worked out from the wire itself that this client is stock GoldSrc
+	// rather than Svengine, with no cooperation from it. It still cannot know
+	// WHICH mod that client runs -- the probe reads the dialect, not the
+	// gamedir -- so the operator names it once here and every Half-Life-dialect
+	// client gets it automatically. An explicit `_gd` from the client still
+	// wins, because that client has actually said what it is running.
+	//
+	// Spoofing the gamedir does not conjure content: the client still needs the
+	// map and models, and mp_consistency will fight you across two games with
+	// different content (rehlds/rehlds#975 again).
+	if (!pszGameDir && SV_Proto_ClientIsHL(client) && sv_proto_hl_gamedir.string[0])
+		pszGameDir = sv_proto_hl_gamedir.string;
+#endif
+
+	if (!pszGameDir)
+	{
 		COM_FileBase(com_gamedir, message);
+		pszGameDir = message;
+	}
 
 	MSG_WriteString(msg, pszGameDir);
 	MSG_WriteString(msg, Cvar_VariableString("hostname"));
