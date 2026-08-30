@@ -119,6 +119,7 @@ set(ENGINE_SRCS
 	engine/sv_main.cpp
 	engine/sv_user.cpp
 	engine/sv_phys.cpp
+	engine/sv_proto.cpp
 	engine/sv_move.cpp
 	engine/sv_pmove.cpp
 	engine/sv_log.cpp
@@ -198,6 +199,7 @@ set(UNITTESTS_SRCS
 	unittests/info_tests.cpp
 	unittests/mathlib_tests.cpp
 	unittests/messagemngr_tests.cpp
+	unittests/proto_tests.cpp
 	unittests/rehlds_tests_shared.cpp
 	unittests/rehlds_tests_shared.h
 	unittests/security_tests.cpp

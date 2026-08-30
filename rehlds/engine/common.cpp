@@ -817,6 +817,46 @@ int MSG_ReadBitData(void *dest, int length)
 	return length;
 }
 
+#ifdef REHLDS_SVEN
+// ---------------------------------------------------------------------------
+// Per-client protocol dialect (see engine/sv_proto.h)
+//
+// Sven Co-op and Half-Life both announce protocol 48, but Svengine widened a
+// handful of wire fields. Which width to use is a property of the destination
+// (or source) buffer, not of the build, so it rides on sizebuf_t::flags and
+// the bit reader/writer read it back off the buffer they are bound to.
+// ---------------------------------------------------------------------------
+
+bool MSG_BufIsHL(const sizebuf_t *sb)
+{
+	return sb != nullptr && (sb->flags & SIZEBUF_PROTO_HL) != 0;
+}
+
+bool MSG_WriteIsHL(void)
+{
+	return MSG_BufIsHL(bfwrite.pbuf);
+}
+
+bool MSG_ReadIsHL(void)
+{
+	// Byte-wise reads go through net_message directly; bit reads are bound to
+	// whatever MSG_StartBitReading was handed, which for client traffic is
+	// also net_message.
+	return MSG_BufIsHL(bfread.pbuf ? bfread.pbuf : &net_message);
+}
+
+void MSG_WriteBitsProto(uint32 data, int svenbits, int hlbits)
+{
+	MSG_WriteBits(data, MSG_WriteIsHL() ? hlbits : svenbits);
+}
+
+uint32 MSG_ReadBitsProto(int svenbits, int hlbits)
+{
+	return MSG_ReadBits(MSG_ReadIsHL() ? hlbits : svenbits);
+}
+
+#endif // REHLDS_SVEN
+
 float MSG_ReadBitCoord(void)
 {
 	float value = 0;
@@ -831,7 +871,7 @@ float MSG_ReadBitCoord(void)
 		if (intval)
 		{
 #ifdef REHLDS_SVEN
-			intval = MSG_ReadBits(24);
+			intval = MSG_ReadBitsProto(PROTO_BITS_SVEN_BITCOORD_INT, PROTO_BITS_HL_BITCOORD_INT);
 #else //!REHLDS_SVEN
 			intval = MSG_ReadBits(12);
 #endif //REHLDS_SVEN
@@ -867,7 +907,7 @@ void MSG_WriteBitCoord(const float f)
 		MSG_WriteOneBit(signbit);
 		if (intval)
 #ifdef REHLDS_SVEN
-			MSG_WriteBits(intval, 24);
+			MSG_WriteBitsProto(intval, PROTO_BITS_SVEN_BITCOORD_INT, PROTO_BITS_HL_BITCOORD_INT);
 #else //!REHLDS_SVEN
 			MSG_WriteBits(intval, 12);
 #endif //REHLDS_SVEN
@@ -912,7 +952,7 @@ float MSG_ReadCoord(void)
 {
 	return (float)(
 #ifdef REHLDS_SVEN
-		MSG_ReadLong()
+		(MSG_ReadIsHL() ? MSG_ReadShort() : MSG_ReadLong())
 #else //!REHLDS_SVEN
 		MSG_ReadShort()
 #endif //REHLDS_SVEN
@@ -922,11 +962,22 @@ float MSG_ReadCoord(void)
 void MSG_WriteCoord(sizebuf_t *sb, const float f)
 {
 #ifdef REHLDS_SVEN
-	MSG_WriteLong
+	int v = (int)(f * 8.0);
+
+	if (MSG_BufIsHL(sb))
+	{
+		// A Half-Life client reads this as a signed short, so a coordinate
+		// past +-4096 units simply cannot be delivered to it. Clamp rather
+		// than truncate: a clamped position is wrong but bounded, whereas a
+		// wrapped one lands on the opposite side of the map.
+		MSG_WriteShort(sb, Q_clamp(v, -32768, 32767));
+		return;
+	}
+
+	MSG_WriteLong(sb, v);
 #else //!REHLDS_SVEN
-	MSG_WriteShort
+	MSG_WriteShort(sb, (int)(f * 8.0));
 #endif //REHLDS_SVEN
-	(sb, (int)(f * 8.0));
 }
 
 void MSG_ReadVec3Coord(sizebuf_t *sb, vec3_t fa)

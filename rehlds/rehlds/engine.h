@@ -32,6 +32,7 @@
 #include "delta.h"
 #include "delta_jit.h"
 #include "server.h"
+#include "sv_proto.h"
 #include "sys_dll.h"
 #include "sys_dll2.h"
 #include "sys_engine.h"

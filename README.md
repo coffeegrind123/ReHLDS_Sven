@@ -24,11 +24,89 @@ Along with reverse engineering, a lot of defects and (potential) bugs were found
 | | |
 |---|---|
 | **Sven Co-op protocol** | Protocol 48 as Svengine speaks it: widened user messages, long-encoded coords and fragment headers, raised `qlimits`, no packet munging, Sven's consistency/delta framing |
+| **Mixed Sven + Half-Life clients** | The dialect is chosen **per client, at runtime**, so retail Sven Co-op 5.26 players and stock Half-Life players (vanilla, or the [SevenKewp](https://github.com/wootguy/SevenKewp) client) can play on the same server — see [Mixed-client servers](#mixed-client-servers) |
 | **Ready-to-run plugin stack** | Releases bundle [metamod-fallguys](https://github.com/hzqst/metamod-fallguys) + [ReUnion](https://github.com/rehlds/reunion) in a `gamedir/` tree, configured to accept non-Steam clients |
 | **Automatic ReUnion salt** | The engine generates a per-server `SteamIdHashSalt` on first run and preserves it across upgrades |
 | **Sven-specific cvars** | `sv_rehlds_sven_block_game_bans`, `sv_rehlds_sven_tolerate_steam_deny`, `sv_rehlds_maxusrcmdprocessticks`, `sv_rehlds_force_allow_lagcompensation`, `sv_log_daily` |
 | **Retail `server.so` fixes** | Recovers from the unterminated `MESSAGE_BEGIN` that killed servers ~30x/day, fixes a `DELTA_ParseDelta` stack overflow, honours `-nobreakpad` |
 | **Steam deny diagnostics** | Every Steam client deny is logged with its reason code, and the four Steam-*connectivity* reasons no longer drop legitimate players |
+
+## Mixed-client servers
+
+Sven Co-op and Half-Life both announce **protocol 48**, but Svengine widened a set of wire
+fields and dropped packet munging. Historically this fork picked one of the two encodings at
+compile time, so a server spoke Sven *or* Half-Life and never both.
+
+It is now chosen **per client**, at runtime. One server, running the retail Sven Co-op
+`server.so`, can serve a retail Sven 5.26 player and a stock Half-Life player at the same
+time.
+
+### How a client's dialect is decided
+
+By its **first netchan packet**, not by anything it claims about itself.
+
+The netchan header (bytes 0-7) is plain in both dialects; everything from byte 8 on is
+`COM_Munge2`'d for Half-Life and plain for Sven. The client speaks first over the netchan —
+its opening message is `clc_stringcmd "new"` — so the server decodes that payload both ways
+and keeps whichever parses as a valid `clc` stream. A userinfo key would be a claim the
+client makes about itself, and can be absent, stale or spoofed; the munge either round-trips
+or it does not.
+
+Nothing dialect-dependent is emitted before that point: everything up to and including the
+`connect` reply is connectionless, and `svc_serverinfo` is composed in response to the very
+`new` that resolves the dialect.
+
+| cvar | default | |
+|---|---|---|
+| `sv_proto_dialect` | `auto` | `auto` detects; `sven` or `hl` forces every client, for testing |
+| `sv_proto_fallback` | `sven` | what to assume if four probes in a row are inconclusive |
+| `sv_proto_log` | `0` | `1` logs each verdict and every `connect`'s protinfo/userinfo; `2` adds hex dumps of both decodings |
+
+`status` gains a `proto` column showing what each connected player is being served.
+
+### What a Half-Life client gives up
+
+These are ceilings of the stock protocol, not bugs — a Half-Life client cannot represent
+them at all, so the engine clamps or truncates rather than sending something it will
+misparse:
+
+| | |
+|---|---|
+| **Coordinates** | Byte-aligned coords are shorts (±4096 units) and bit-packed ones have a 12-bit integer part. Values past that are **clamped**, not wrapped — a clamped position is wrong but bounded; a wrapped one lands on the far side of the map. |
+| **Entity indices** | 11 bits, so entities past 2047 are not addressable. Sven's are 13. |
+| **Delta fields** | The bitmask length is 3 bits, so at most 7 bytes, so at most **56 fields**. Measured against retail 5.26's `svencoop/delta.lst` this costs exactly one: `entity_state_t::gaitsequence` (#57). Every other struct fits — `clientdata_t` 34, `entity_state_player_t` 51, `weapon_data_t` 22, `custom_entity_state_t` 20, `usercmd_t` 15, `event_t` 14. Half-Life clients lose leg animation on non-player entities and nothing else. |
+| **Weapon slots** | 64, not 256 — and the engine sends at most **63**, because a stock client's reader exits on its loop bound and would leave the list terminator unread at exactly 64. |
+| **User messages** | Registered as variable-length, since narrowing coordinates changes the payload length after the size was advertised at signon. One that still exceeds 255 bytes cannot be framed and is dropped with a `Con_DPrintf`. |
+| **Unreliable payload** | Capped at 4000 bytes and at `MAX_ROUTEABLE_PACKET`, rather than Sven's 65000. |
+| **Resource / consistency indices** | 12 and 10 bits respectively, against Sven's 16. |
+
+The game DLL is a separate matter from the wire. The engine will frame every message
+correctly for both clients; whether a Half-Life client has the *content* (models, sounds,
+sprites) and the client-side message handlers to make sense of what a Sven mod sends it is up
+to the mod and the gamedir, not the engine.
+
+### How it is built
+
+The whole thing keys off one bit on `sizebuf_t::flags` (`SIZEBUF_PROTO_HL`). A buffer with
+no stamp is native Sven, so **every path that predates this layer behaves exactly as it did**
+— only buffers destined for a Half-Life client diverge. The `MSG_*` primitives read the stamp
+off the buffer they are writing to, or off the bit writer's current buffer, so a call site
+says `PROTO_BITS(ENTITY_NUMBER, num)` and never has to know who the recipient is.
+
+Every divergence is declared once, in `PROTO_BITFIELD_LIST` in
+[`rehlds/engine/sv_proto.h`](rehlds/engine/sv_proto.h), so a field's two widths cannot drift
+apart at the call sites. ⚠ Note that the event `packet_index` is **narrower** under Sven (10
+bits vs 11) while everything else is wider — folding it in with the entity indices by reflex
+is a mistake that has already cost one debugging session.
+
+Four buffers are composed once and replayed to every client — the signon block, the broadcast
+datagram, the multicast staging buffer and the spectator datagram — so those are built
+**twice**, once per dialect, and the consumer picks by recipient. Transcoding on delivery was
+rejected: it would need a parser for every `svc` message and would rot the first time one
+changed. `g_psv.reliable_datagram` is deliberately not twinned; its `MSG_ALL` user messages
+are already fanned out per client and what remains is dialect-neutral.
+
+`rehlds/unittests/proto_tests.cpp` round-trips every field in the table through both stamps.
 
 ## Goals of the project
 <ul>
