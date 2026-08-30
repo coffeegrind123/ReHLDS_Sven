@@ -61,8 +61,44 @@ Nothing dialect-dependent is emitted before that point: everything up to and inc
 | `sv_proto_dialect` | `auto` | `auto` detects; `sven` or `hl` forces every client, for testing |
 | `sv_proto_fallback` | `sven` | what to assume if four probes in a row are inconclusive |
 | `sv_proto_log` | `0` | `1` logs each verdict and every `connect`'s protinfo/userinfo; `2` adds hex dumps of both decodings |
+| `sv_proto_hl_gamedir` | *(empty)* | gamedir reported to Half-Life clients only — see [The gamedir gate](#the-gamedir-gate) |
 
 `status` gains a `proto` column showing what each connected player is being served.
+
+### The gamedir gate
+
+A stock Half-Life client checks the server's gamedir **client-side** and disconnects itself
+before it ever spawns:
+
+```
+Sven Co-op 5.26
+Server Engine: 5.0.18 (build 10493)
+Server Number: 1
+
+Server is running game svencoop.  Restart in that game to connect.
+```
+
+That is not a protocol failure — reaching it means the wire is correct.
+[rehlds/rehlds#975](https://github.com/rehlds/rehlds/issues/975) settled the general case: the
+only fix is for the server to report a different gamedir, and it was judged to need the client
+to declare its game through `setinfo`, "*but this does not happen*". That is what upstream's
+`_gd` userinfo key is for; it still works here and still takes precedence.
+
+The dialect probe removes that dependency for this case. The server has already worked out
+from the wire that a client is stock GoldSrc rather than Svengine, with no cooperation from
+it, so it can spoof the gamedir for exactly those clients. It still cannot know *which* mod a
+stock client runs — the probe reads the dialect, not the gamedir — so name it once:
+
+```
+sv_proto_hl_gamedir "valve"      // or whatever gamedir your Half-Life-side players run
+```
+
+Empty (the default) reports the real gamedir and changes nothing.
+
+⚠ **Spoofing the gamedir does not conjure content.** The client still needs the map and the
+models, and `mp_consistency` will fight you across two games with different content — the same
+caveat rehlds#975 raises. This gets a Half-Life-side client *past the gate*; having something
+to play once through is a mod and gamedir question, not an engine one.
 
 ### What a Half-Life client gives up
 

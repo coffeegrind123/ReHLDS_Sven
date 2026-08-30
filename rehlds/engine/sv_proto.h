@@ -112,6 +112,7 @@ typedef struct netchan_s netchan_t;
 extern cvar_t sv_proto_dialect;		// "auto" | "sven" | "hl"
 extern cvar_t sv_proto_fallback;	// dialect to assume when detection is inconclusive
 extern cvar_t sv_proto_log;		// 0 off, 1 verdicts, 2 full hex dumps
+extern cvar_t sv_proto_hl_gamedir;	// gamedir reported to Half-Life clients
 
 void SV_Proto_Init(void);
 

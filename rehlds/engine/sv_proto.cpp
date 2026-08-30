@@ -34,6 +34,10 @@ cvar_t sv_proto_dialect  = { "sv_proto_dialect",  "auto", FCVAR_SERVER, 0.0f, nu
 cvar_t sv_proto_fallback = { "sv_proto_fallback", "sven", FCVAR_SERVER, 0.0f, nullptr };
 cvar_t sv_proto_log      = { "sv_proto_log",      "0",    0,            0.0f, nullptr };
 
+// The gamedir reported to Half-Life-dialect clients, or empty to report the
+// real one. See SV_SendServerinfo_internal for why this exists.
+cvar_t sv_proto_hl_gamedir = { "sv_proto_hl_gamedir", "", FCVAR_SERVER, 0.0f, nullptr };
+
 // Per-slot dialect. Deliberately NOT a client_t member: client_t is walked by
 // Metamod plugins that were compiled against the current layout, and growing
 // it would shift g_psvs.clients' stride under them.
@@ -90,6 +94,7 @@ void SV_Proto_Init(void)
 	Cvar_RegisterVariable(&sv_proto_dialect);
 	Cvar_RegisterVariable(&sv_proto_fallback);
 	Cvar_RegisterVariable(&sv_proto_log);
+	Cvar_RegisterVariable(&sv_proto_hl_gamedir);
 
 	// Also done per map in SV_SpawnServer; do it here so the twins are never
 	// a null-data sizebuf, whatever order a caller reaches them in.
