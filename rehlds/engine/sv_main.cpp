@@ -685,23 +685,35 @@ void SV_FindModelNumbers(void)
 	}
 }
 
+static void SV_StartParticle_ToBuffer(sizebuf_t *sb, const vec_t *org, const vec_t *dir, int color, int count)
+{
+	// 16 is the stock size; a Sven-encoded one is 6 bytes longer because each
+	// coordinate is a long rather than a short.
+	const int needed = MSG_BufIsHL(sb) ? 16 : 22;
+
+	if (sb->cursize + needed > sb->maxsize)
+		return;
+
+	MSG_WriteByte(sb, svc_particle);
+	MSG_WriteCoord(sb, org[0]);
+	MSG_WriteCoord(sb, org[1]);
+	MSG_WriteCoord(sb, org[2]);
+
+	for (int i = 0; i < 3; i++)
+	{
+		MSG_WriteChar(sb, Q_clamp((int)(dir[i] * 16.0f), -128, 127));
+	}
+
+	MSG_WriteByte(sb, count);
+	MSG_WriteByte(sb, color);
+}
+
 void SV_StartParticle(const vec_t *org, const vec_t *dir, int color, int count)
 {
-	if (g_psv.datagram.cursize + 16 <= g_psv.datagram.maxsize)
-	{
-		MSG_WriteByte(&g_psv.datagram, svc_particle);
-		MSG_WriteCoord(&g_psv.datagram, org[0]);
-		MSG_WriteCoord(&g_psv.datagram, org[1]);
-		MSG_WriteCoord(&g_psv.datagram, org[2]);
-
-		for (int i = 0; i < 3; i++)
-		{
-			MSG_WriteChar(&g_psv.datagram, Q_clamp((int)(dir[i] * 16.0f), -128, 127));
-		}
-
-		MSG_WriteByte(&g_psv.datagram, count);
-		MSG_WriteByte(&g_psv.datagram, color);
-	}
+	SV_StartParticle_ToBuffer(&g_psv.datagram, org, dir, color, count);
+#ifdef REHLDS_SVEN
+	SV_StartParticle_ToBuffer(&g_sv_datagram_hl, org, dir, color, count);
+#endif
 }
 
 void SV_StartSound(int recipients, edict_t *entity, int channel, const char *sample, int volume, float attenuation, int fFlags, int pitch)
@@ -722,6 +734,14 @@ void EXT_FUNC SV_StartSound_internal(int recipients, edict_t *entity, int channe
 	{
 		return;
 	}
+
+#ifdef REHLDS_SVEN
+	// svc_sound is bit-packed and carries both a widened entity index and
+	// bit-packed coordinates, so the Half-Life twin has to be built separately
+	// rather than copied. SV_Multicast then hands each client the one it can
+	// parse.
+	SV_BuildSoundMsg(entity, channel, sample, volume, attenuation, fFlags, pitch, origin, &g_sv_multicast_hl);
+#endif
 
 	int flags = 0;
 	if (recipients == 1)
@@ -815,7 +835,11 @@ qboolean SV_BuildSoundMsg(edict_t *entity, int channel, const char *sample, int 
 	if (field_mask & SND_FL_ATTENUATION)
 		MSG_WriteBits((uint32)(attenuation * 64.0f), 8);
 	MSG_WriteBits(channel, 3);
+#ifdef REHLDS_SVEN
+	PROTO_BITS(SOUND_ENTITY, ent);
+#else
 	MSG_WriteBits(ent, MAX_EDICT_BITS);
+#endif
 	MSG_WriteBits(sound_num, (field_mask & SND_FL_LARGE_INDEX) ? 16 : 8);
 	MSG_WriteBitVec3Coord(origin);
 	if (field_mask & SND_FL_PITCH)
@@ -1000,12 +1024,18 @@ void SV_Multicast(edict_t *ent, vec_t *origin, int to, qboolean reliable)
 			if (!reliable)
 				pBuffer = &client->datagram;
 
+#ifdef REHLDS_SVEN
+			const sizebuf_t *pSource = SV_Proto_PickShared(&g_psv.multicast, client);
+#else
+			const sizebuf_t *pSource = &g_psv.multicast;
+#endif
+
 #ifdef REHLDS_FIXES
-			if (pBuffer->cursize + g_psv.multicast.cursize <= pBuffer->maxsize)	// TODO: Should it be <= ? I think so.
+			if (pBuffer->cursize + pSource->cursize <= pBuffer->maxsize)	// TODO: Should it be <= ? I think so.
 #else // REHLDS_FIXES
-			if (pBuffer->cursize + g_psv.multicast.cursize < pBuffer->maxsize)
+			if (pBuffer->cursize + pSource->cursize < pBuffer->maxsize)
 #endif // REHLDS_FIXES
-				SZ_Write(pBuffer, g_psv.multicast.data, g_psv.multicast.cursize);
+				SZ_Write(pBuffer, pSource->data, pSource->cursize);
 		}
 		else
 		{
@@ -1013,7 +1043,11 @@ void SV_Multicast(edict_t *ent, vec_t *origin, int to, qboolean reliable)
 		}
 	}
 
+#ifdef REHLDS_SVEN
+	SV_Proto_ClearShared(&g_psv.multicast);
+#else
 	SZ_Clear(&g_psv.multicast);
+#endif
 	host_client = save;
 }
 
@@ -1062,6 +1096,15 @@ void EXT_FUNC SV_WriteDeltaDescriptionsToClient(sizebuf_t *msg)
 		MSG_StartBitWriting(msg);
 
 		c = p->delta->fieldCount;
+
+#ifdef REHLDS_SVEN
+		// Half-Life clients cannot address a field past this index (see
+		// PROTO_HL_MAX_DELTA_FIELDS), so describing one to them would only
+		// desynchronise their parse table from what _DELTA_WriteDelta will
+		// actually send. Advertise the truncated table instead.
+		if (MSG_BufIsHL(msg) && c > PROTO_HL_MAX_DELTA_FIELDS)
+			c = PROTO_HL_MAX_DELTA_FIELDS;
+#endif
 
 		MSG_WriteBits(c, 16);
 
@@ -1145,9 +1188,11 @@ void SV_SendServerinfo_internal(sizebuf_t *msg, client_t *client)
 	int playernum = NUM_FOR_EDICT(client->edict) - 1;
 	int mungebuffer = g_psv.worldmapCRC;
 
-#ifndef REHLDS_SVEN
+#ifdef REHLDS_SVEN
+	// Svengine dropped the CRC munge; stock Half-Life still expects it.
+	if (MSG_BufIsHL(msg))
+#endif //REHLDS_SVEN
 	COM_Munge3((byte *)&mungebuffer, sizeof(mungebuffer), (-1 - playernum) & 0xFF);
-#endif //!REHLDS_SVEN
 	MSG_WriteLong(msg, mungebuffer);
 
 	MSG_WriteBuf(msg, sizeof(g_psv.clientdllmd5), g_psv.clientdllmd5);
@@ -1260,7 +1305,11 @@ void EXT_FUNC SV_SendResources_internal(sizebuf_t *msg)
 
 	MSG_WriteByte(msg, svc_resourcelist);
 	MSG_StartBitWriting(msg);
+#ifdef REHLDS_SVEN
+	PROTO_BITS(RESOURCE_INDEX, g_psv.num_resources);
+#else
 	MSG_WriteBits(g_psv.num_resources, RESOURCE_INDEX_BITS);
+#endif
 
 #ifdef REHLDS_FIXES
 	resource_t *r = g_rehlds_sv.resources;
@@ -1356,7 +1405,7 @@ void SV_WriteClientdataToMessage(client_t *client, sizebuf_t *msg)
 	{
 		MSG_WriteBits(1, 1);
 #ifdef REHLDS_SVEN
-		MSG_WriteBits(host_client->delta_sequence, 16);
+		PROTO_BITS(DELTA_SEQUENCE, host_client->delta_sequence);
 #else //!REHLDS_SVEN
 		MSG_WriteBits(host_client->delta_sequence, 8);
 #endif //REHLDS_SVEN
@@ -1374,7 +1423,23 @@ void SV_WriteClientdataToMessage(client_t *client, sizebuf_t *msg)
 		weapon_data_t *tdata = frame->weapondata;
 
 #ifdef REHLDS_SVEN
-		for (int i = 0; i < 256; i++, tdata++)
+		// A Half-Life client indexes weapon slots with 6 bits, so it has 64 of
+		// them; Sven widened the index to 8 bits and the array to 256. Walk
+		// only as far as the recipient can address.
+		//
+		// 63, not 64. The entry list is terminated by a 0 bit, and a stock
+		// client's reader is
+		//
+		//     for (i = 0; i < 64; i++) { if (!MSG_ReadOneBit()) break; ... }
+		//
+		// which exits on the BOUND when all 64 entries are present, leaving the
+		// terminator unread. That is a one-bit under-read, and because
+		// MSG_EndBitWriting pads to a byte it only bites when the payload is
+		// not a whole number of bytes -- so it survives most connections and
+		// then desyncs the next svc by exactly one byte. Never hand a client an
+		// entry count that can coincide with its loop bound.
+		const int weaponSlots = MSG_BufIsHL(msg) ? 63 : 256;
+		for (int i = 0; i < weaponSlots; i++, tdata++)
 #else //!REHLDS_SVEN
 		for (int i = 0; i < 64; i++, tdata++)
 #endif //REHLDS_SVEN
@@ -1406,13 +1471,19 @@ void SV_WriteClientdataToMessage(client_t *client, sizebuf_t *msg)
 			else
 				fdata = &host_client->frames[bits].weapondata[i];
 
-#ifndef REHLDS_SVEN // In Sven, this check doesn't exist
+#ifdef REHLDS_SVEN
+			// Sven sends every slot unconditionally. Keep the stock skip for
+			// Half-Life clients: it is protocol-legal for both, and without it
+			// a 64-slot dump every frame is pure waste on a client that is
+			// already on the narrower encoding.
+			if (!MSG_BufIsHL(msg) || DELTA_CheckDelta((byte *)fdata, (byte *)tdata, g_pweapondelta))
+#else // !REHLDS_SVEN
 			if (DELTA_CheckDelta((byte *)fdata, (byte *)tdata, g_pweapondelta))
-#endif // !REHLDS_SVEN
+#endif // REHLDS_SVEN
 			{
 				MSG_WriteBits(1, 1);
 #ifdef REHLDS_SVEN
-				MSG_WriteBits(i, 8);
+				PROTO_BITS(WEAPON_INDEX, i);
 #else //!REHLDS_SVEN
 				MSG_WriteBits(i, 6);
 #endif //REHLDS_SVEN
@@ -1553,9 +1624,21 @@ void SV_SendUserReg(sizebuf_t *msg, UserMsg *pUserMsgs)
 
 	for (UserMsg *pMsg = pUserMsgs; pMsg; pMsg = pMsg->next)
 	{
+		int iSize = pMsg->iSize;
+#ifdef REHLDS_SVEN
+		// Advertise everything as variable-length to a Half-Life client. A
+		// fixed size describes the WIDE payload, and WriteMessageToBuffer
+		// narrows 4-byte coordinates to 2 on the way to such a client, so any
+		// message carrying a coordinate would arrive shorter than the size it
+		// was registered with. Which messages carry one is not knowable here
+		// -- the registration goes out at signon, before any of them is
+		// composed -- so the size is deferred to each send instead.
+		if (MSG_BufIsHL(msg))
+			iSize = -1;
+#endif
 		MSG_WriteByte(msg, svc_newusermsg);
 		MSG_WriteByte(msg, pMsg->iMsg);
-		MSG_WriteByte(msg, pMsg->iSize);
+		MSG_WriteByte(msg, iSize);
 		MSG_WriteBuf(msg, sizeof(pMsg->szName), pMsg->szName);
 	}
 }
@@ -1577,6 +1660,9 @@ void SV_New_f(void)
 	msg.maxsize = sizeof(data);
 	msg.cursize = 0;
 	msg.flags = SIZEBUF_CHECK_OVERFLOW;
+#ifdef REHLDS_SVEN
+	SV_Proto_StampBuffer(&msg, SV_Proto_DialectOfClient(host_client));
+#endif
 
 	// Not valid on the client
 	if (cmd_source == src_command)
@@ -1665,6 +1751,9 @@ void SV_SendRes_f(void)
 	msg.maxsize = sizeof(data);
 	msg.cursize = 0;
 	msg.flags = SIZEBUF_CHECK_OVERFLOW;
+#ifdef REHLDS_SVEN
+	SV_Proto_StampBuffer(&msg, SV_Proto_DialectOfClient(host_client));
+#endif
 
 	if (cmd_source != src_command && (!host_client->spawned || host_client->active))
 	{
@@ -1694,6 +1783,9 @@ void EXT_FUNC SV_Spawn_f_internal(void)
 	msg.maxsize = sizeof(data);
 	msg.cursize = 0;
 	msg.flags = SIZEBUF_CHECK_OVERFLOW;
+#ifdef REHLDS_SVEN
+	SV_Proto_StampBuffer(&msg, SV_Proto_DialectOfClient(host_client));
+#endif
 
 	if (Cmd_Argc() != 3)
 	{
@@ -1711,9 +1803,10 @@ void EXT_FUNC SV_Spawn_f_internal(void)
 
 	host_client->crcValue = Q_atoi(Cmd_Argv(2));
 
-#ifndef REHLDS_SVEN
+#ifdef REHLDS_SVEN
+	if (SV_Proto_ClientIsHL(host_client))
+#endif //REHLDS_SVEN
 	COM_UnMunge2((unsigned char *)&host_client->crcValue, 4, (-1 - g_psvs.spawncount) & 0xFF);
-#endif //!REHLDS_SVEN
 
 	if (cmd_source == src_command)
 	{
@@ -1731,7 +1824,12 @@ void EXT_FUNC SV_Spawn_f_internal(void)
 		}
 #endif // REHLDS_FIXES
 
-		SZ_Write(&msg, g_psv.signon.data, g_psv.signon.cursize);
+#ifdef REHLDS_SVEN
+		const sizebuf_t *pSignon = SV_Proto_PickShared(&g_psv.signon, host_client);
+#else
+		const sizebuf_t *pSignon = &g_psv.signon;
+#endif
+		SZ_Write(&msg, pSignon->data, pSignon->cursize);
 		SV_WriteSpawn(&msg);
 
 #ifdef REHLDS_FIXES
@@ -2555,6 +2653,13 @@ void EXT_FUNC SV_ConnectClient_internal(void)
 		g_modfuncs.m_pfnConnectClient(nClientSlot);
 
 	Netchan_Setup(NS_SERVER, &host_client->netchan, adr, client - g_psvs.clients, client, SV_GetFragmentSize);
+#ifdef REHLDS_SVEN
+	// A reconnecting slot may have been the other dialect a moment ago, so this
+	// has to reset -- not merely be left alone -- on every connect.
+	SV_Proto_ResetClient(nClientSlot);
+	SV_Proto_StampClientBuffers(host_client);
+	SV_Proto_LogConnect(&adr, protinfo, userinfo);
+#endif
 	host_client->next_messageinterval = 5.0;
 	host_client->next_messagetime = realtime + 0.05;
 	host_client->delta_sequence = -1;
@@ -3984,6 +4089,13 @@ void SV_ReadPackets(void)
 		if (!pass)
 			continue;
 
+#ifdef REHLDS_SVEN
+		// Connectionless traffic is dialect-neutral; anything else is stamped
+		// with the sender's dialect below, so the MSG_Read* primitives pick the
+		// right widths while parsing it.
+		SV_Proto_StampBuffer(&net_message, PROTO_DIALECT_SVEN);
+#endif
+
 		if (*(uint32 *)net_message.data == 0xFFFFFFFF)
 		{
 			// Connectionless packet
@@ -4016,6 +4128,16 @@ void SV_ReadPackets(void)
 			{
 				continue;
 			}
+
+#ifdef REHLDS_SVEN
+			// Decide the dialect BEFORE Netchan_Process, because the first
+			// thing it does is (not) unmunge the payload -- the very
+			// difference we are detecting. This runs on the client's first
+			// netchan datagram, which carries clc_stringcmd "new", and the
+			// server has emitted nothing dialect-dependent before that point.
+			SV_Proto_ProbeIncoming(cl, net_message.data, net_message.cursize);
+			SV_Proto_StampBuffer(&net_message, SV_Proto_DialectOfClient(cl));
+#endif
 
 			if (Netchan_Process(&cl->netchan))
 			{
@@ -4318,10 +4440,11 @@ void SV_EmitEvents_internal(client_t *cl, packet_entities_t *pack, sizebuf_t *ms
 			if (info->packet_index != -1)
 			{
 				MSG_WriteBits(1, 1);
-#ifndef REHLDS_SVEN
-				MSG_WriteBits(info->packet_index, 11);
+#ifdef REHLDS_SVEN
+				// xWhitey: This is a change in Sven Co-op. Why did they take one bit LOL?
+				PROTO_BITS(EVENT_INDEX, info->packet_index);
 #else //!REHLDS_SVEN
-				MSG_WriteBits(info->packet_index, 10); // xWhitey: This is a change in Sven Co-op. Why did they take one bit LOL?
+				MSG_WriteBits(info->packet_index, 11);
 #endif //REHLDS_SVEN
 				if (Q_memcmp(&nullargs, &info->args, sizeof(event_args_t)))
 				{
@@ -4547,7 +4670,7 @@ void SV_WriteDeltaHeader(int num, qboolean remove, qboolean custom, int *numbase
 		{
 			MSG_WriteBits(1u, 1);
 #ifdef REHLDS_SVEN
-			MSG_WriteBits(num, 13);
+			PROTO_BITS(ENTITY_NUMBER, num);
 #else //!REHLDS_SVEN
 			MSG_WriteBits(num, 11);
 #endif //REHLDS_SVEN
@@ -4692,9 +4815,16 @@ int SV_CreatePacketEntities_internal(sv_delta_t type, client_t *client, packet_e
 		MSG_WriteByte(msg, svc_deltapacketentities);    // This is a delta
 		MSG_WriteShort(msg, to->num_entities);          // This is how many ents are in the new packet
 #ifdef REHLDS_SVEN
-		MSG_StartBitWriting(msg);
-		MSG_WriteBits(client->delta_sequence, 16);     // This is the sequence # that we are updating from
-		MSG_EndBitWriting(msg);
+		if (MSG_BufIsHL(msg))
+		{
+			MSG_WriteByte(msg, client->delta_sequence); // This is the sequence # that we are updating from
+		}
+		else
+		{
+			MSG_StartBitWriting(msg);
+			MSG_WriteBits(client->delta_sequence, PROTO_BITS_SVEN_DELTA_SEQUENCE);
+			MSG_EndBitWriting(msg);
+		}
 #else //!REHLDS_SVEN
 		MSG_WriteByte(msg, client->delta_sequence);     // This is the sequence # that we are updating from
 #endif //REHLDS_SVEN
@@ -5140,6 +5270,15 @@ qboolean SV_SendClientDatagram(client_t *client)
 	msg.maxsize = sizeof(buf);
 	msg.cursize = 0;
 	msg.flags = SIZEBUF_ALLOW_OVERFLOW;
+#ifdef REHLDS_SVEN
+	SV_Proto_StampBuffer(&msg, SV_Proto_DialectOfClient(client));
+
+	// A Half-Life client's unreliable payload is bounded by its own
+	// MAX_DATAGRAM (4000), not Sven's 65000. Writing past that produces a
+	// datagram it cannot receive, so cap the buffer rather than the packet.
+	if (MSG_BufIsHL(&msg) && msg.maxsize > HL_MAX_DATAGRAM)
+		msg.maxsize = HL_MAX_DATAGRAM;
+#endif
 
 	MSG_WriteByte(&msg, svc_time);
 #ifdef REHLDS_FIXES
@@ -5261,6 +5400,22 @@ void SV_UpdateToReliableMessages(void)
 		SZ_Clear(&g_psv.spectator);
 	}
 
+#ifdef REHLDS_SVEN
+	// The twins overflow independently -- the Sven encoding is the larger of
+	// the two, so it is normally the one that goes first, but not always.
+	if (g_sv_datagram_hl.flags & SIZEBUF_OVERFLOWED)
+	{
+		Con_DPrintf("sv.datagram (HL) overflowed!\n");
+		SZ_Clear(&g_sv_datagram_hl);
+	}
+
+	if (g_sv_spectator_hl.flags & SIZEBUF_OVERFLOWED)
+	{
+		Con_DPrintf("sv.spectator (HL) overflowed!\n");
+		SZ_Clear(&g_sv_spectator_hl);
+	}
+#endif
+
 	// Fix for the "server failed to transmit file 'AY&SY..." bug
 	// https://github.com/dreamstalker/rehlds/issues/38
 #ifdef REHLDS_FIXES
@@ -5301,9 +5456,18 @@ void SV_UpdateToReliableMessages(void)
 		}
 #endif
 
-		if (g_psv.datagram.cursize + client->datagram.cursize < client->datagram.maxsize)
+#ifdef REHLDS_SVEN
+		SV_Proto_StampClientBuffers(client);
+		const sizebuf_t *pSvDatagram  = SV_Proto_PickShared(&g_psv.datagram, client);
+		const sizebuf_t *pSvSpectator = SV_Proto_PickShared(&g_psv.spectator, client);
+#else
+		const sizebuf_t *pSvDatagram  = &g_psv.datagram;
+		const sizebuf_t *pSvSpectator = &g_psv.spectator;
+#endif
+
+		if (pSvDatagram->cursize + client->datagram.cursize < client->datagram.maxsize)
 		{
-			SZ_Write(&client->datagram, g_psv.datagram.data, g_psv.datagram.cursize);
+			SZ_Write(&client->datagram, pSvDatagram->data, pSvDatagram->cursize);
 		}
 		else
 		{
@@ -5312,9 +5476,9 @@ void SV_UpdateToReliableMessages(void)
 
 		if (client->proxy)
 		{
-			if (g_psv.spectator.cursize + client->datagram.cursize < client->datagram.maxsize)
+			if (pSvSpectator->cursize + client->datagram.cursize < client->datagram.maxsize)
 			{
-				SZ_Write(&client->datagram, g_psv.spectator.data, g_psv.spectator.cursize);
+				SZ_Write(&client->datagram, pSvSpectator->data, pSvSpectator->cursize);
 			}
 #ifdef REHLDS_FIXES
 			else
@@ -5326,8 +5490,13 @@ void SV_UpdateToReliableMessages(void)
 	}
 
 	SZ_Clear(&g_psv.reliable_datagram);
+#ifdef REHLDS_SVEN
+	SV_Proto_ClearShared(&g_psv.datagram);
+	SV_Proto_ClearShared(&g_psv.spectator);
+#else
 	SZ_Clear(&g_psv.datagram);
 	SZ_Clear(&g_psv.spectator);
+#endif
 }
 
 void SV_SkipUpdates(void)
@@ -6012,14 +6181,60 @@ void EXT_FUNC SV_WriteVoiceCodec_internal(sizebuf_t *pBuf)
 	MSG_WriteByte(pBuf, 0);
 }
 
+// Emit the svc_spawnbaseline block into `msg`, in whichever dialect that
+// buffer is stamped for.
+static void SV_EmitBaselines(sizebuf_t *msg)
+{
+	edict_t *svent;
+	int entnum;
+	qboolean custom;
+	entity_state_t nullstate;
+	delta_t *pDelta;
+
+	Q_memset(&nullstate, 0, sizeof(entity_state_t));
+
+	MSG_WriteByte(msg, svc_spawnbaseline);
+	MSG_StartBitWriting(msg);
+
+	for (entnum = 0; entnum < g_psv.num_edicts; entnum++)
+	{
+		svent = &g_psv.edicts[entnum];
+		if (!svent->free && (g_psvs.maxclients >= entnum || svent->v.modelindex))
+		{
+#ifdef REHLDS_SVEN
+			PROTO_BITS(ENTITY_NUMBER, entnum);
+#else //!REHLDS_SVEN
+			MSG_WriteBits(entnum, 11);
+#endif //REHLDS_SVEN
+			MSG_WriteBits(g_psv.baselines[entnum].entityType, 2);
+			custom = ~g_psv.baselines[entnum].entityType & ENTITY_NORMAL;
+			if (custom)
+				pDelta = g_pcustomentitydelta;
+			else
+			{
+				pDelta = g_pplayerdelta;
+				if (!SV_IsPlayerIndex(entnum))
+					pDelta = g_pentitydelta;
+			}
+
+			DELTA_WriteDelta((byte *)&nullstate, (byte *)&(g_psv.baselines[entnum]), TRUE, pDelta, NULL);
+		}
+	}
+
+	MSG_WriteBits(0xFFFF, 16);
+	MSG_WriteBits(g_psv.instance_baselines->number, 6);
+	for (entnum = 0; entnum < g_psv.instance_baselines->number; entnum++)
+		DELTA_WriteDelta((byte *)&nullstate, (byte *)&(g_psv.instance_baselines->baseline[entnum]), TRUE, g_pentitydelta, NULL);
+
+	MSG_EndBitWriting(msg);
+}
+
 void SV_CreateBaseline(void)
 {
 	edict_t *svent;
 	int entnum;
 	qboolean player;
-	qboolean custom;
 	entity_state_t nullstate;
-	delta_t *pDelta;
 
 	g_psv.instance_baselines = &g_sv_instance_baselines;
 	Q_memset(&nullstate, 0, sizeof(entity_state_t));
@@ -6077,39 +6292,19 @@ void SV_CreateBaseline(void)
 		}
 	}
 	gEntityInterface.pfnCreateInstancedBaselines();
-	MSG_WriteByte(&g_psv.signon, svc_spawnbaseline);
-	MSG_StartBitWriting(&g_psv.signon);
-	for (entnum = 0; entnum < g_psv.num_edicts; entnum++)
-	{
-		svent = &g_psv.edicts[entnum];
-		if (!svent->free && (g_psvs.maxclients >= entnum || svent->v.modelindex))
-		{
+
+	SV_EmitBaselines(&g_psv.signon);
 #ifdef REHLDS_SVEN
-			MSG_WriteBits(entnum, 13);
-#else //!REHLDS_SVEN
-			MSG_WriteBits(entnum, 11);
-#endif //REHLDS_SVEN
-			MSG_WriteBits(g_psv.baselines[entnum].entityType, 2);
-			custom = ~g_psv.baselines[entnum].entityType & ENTITY_NORMAL;
-			if (custom)
-				pDelta = g_pcustomentitydelta;
-			else
-			{
-				pDelta = g_pplayerdelta;
-				if (!SV_IsPlayerIndex(entnum))
-					pDelta = g_pentitydelta;
-			}
-
-			DELTA_WriteDelta((byte *)&nullstate, (byte *)&(g_psv.baselines[entnum]), TRUE, pDelta, NULL);
-		}
-	}
-
-	MSG_WriteBits(0xFFFF, 16);
-	MSG_WriteBits(g_psv.instance_baselines->number, 6);
-	for (entnum = 0; entnum < g_psv.instance_baselines->number; entnum++)
-		DELTA_WriteDelta((byte *)&nullstate, (byte *)&(g_psv.instance_baselines->baseline[entnum]), TRUE, g_pentitydelta, NULL);
-
-	MSG_EndBitWriting(&g_psv.signon);
+	// svc_spawnbaseline is bit-packed: the entity index is 13 bits under Sven
+	// and 11 under Half-Life, and every DELTA_WriteDelta inside it carries a
+	// bitmask whose length field differs too. There is no byte-level patch that
+	// turns one into the other, so the block is emitted twice.
+	//
+	// The 0xFFFF terminator is NOT one of the widened fields: a client reads a
+	// 16-bit word, compares it to 0xFFFF, and only then seeks back and reads
+	// the index at its own width. So it stays 16 bits in both.
+	SV_EmitBaselines(&g_sv_signon_hl);
+#endif
 }
 
 void SV_BroadcastCommand(char *fmt, ...)
@@ -6444,9 +6639,15 @@ void EXT_FUNC SV_ActivateServer_internal(int runPhysics)
 			}
 			else
 			{
+#ifdef REHLDS_SVEN
+				SV_Proto_StampBuffer(&msg, SV_Proto_DialectOfClient(cl));
+#endif
 				SV_SendServerinfo(&msg, cl);
 			}
 
+#ifdef REHLDS_SVEN
+			SV_Proto_StampBuffer(&msg, SV_Proto_DialectOfClient(cl));
+#endif
 			SV_SendUserReg(&msg, sv_gpUserMsgs);
 			cl->hasusrmsgs = TRUE;
 
@@ -6672,6 +6873,10 @@ int SV_SpawnServer(qboolean bIsDemo, char *server, char *startspot)
 	g_psv.signon.maxsize = sizeof(g_psv.signon_data);
 #endif
 	g_psv.signon.cursize = 0;
+
+#ifdef REHLDS_SVEN
+	SV_Proto_InitSharedBuffers();
+#endif
 
 	g_psv.num_edicts = g_psvs.maxclients + 1;
 
@@ -8702,6 +8907,7 @@ void SV_Init(void)
 #ifdef REHLDS_SVEN
 	Cvar_RegisterVariable(&sv_rehlds_sven_block_game_bans);
 	Cvar_RegisterVariable(&sv_rehlds_sven_tolerate_steam_deny);
+	SV_Proto_Init();
 #endif // REHLDS_SVEN
 
 	Cvar_RegisterVariable(&sv_rollspeed);

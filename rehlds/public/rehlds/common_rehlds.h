@@ -41,6 +41,13 @@
 #define SIZEBUF_ALLOW_OVERFLOW	BIT(0)
 #define SIZEBUF_OVERFLOWED		BIT(1)
 
+// REHLDS_SVEN: this buffer is destined for a stock Half-Life client, so the
+// MSG_* primitives writing into it must use the Half-Life encoding of the
+// fields Svengine widened (coords, delta bitmask length, entity/resource
+// indices). Unset means the native Sven encoding, so every buffer that
+// predates the per-client dialect layer keeps its old behaviour.
+#define SIZEBUF_PROTO_HL		BIT(2)
+
 #define MAX_NUM_ARGVS	50
 #define NUM_SAFE_ARGVS	7
 

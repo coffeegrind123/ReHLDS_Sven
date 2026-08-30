@@ -112,6 +112,20 @@ typedef struct SPLITPACKET_t
 	unsigned char packetID;
 #endif //REHLDS_SVEN
 } SPLITPACKET;
+
+#ifdef REHLDS_SVEN
+// The stock Half-Life layout, kept alongside so one build can frame a split
+// packet for either kind of client. Sven widened packetID to a short and moved
+// the fragment number from bits 4-7 to bits 8-15, which also makes the header
+// itself one byte longer -- so this is a different struct, not a different
+// mask.
+typedef struct SPLITPACKETHL_t
+{
+	int netID;
+	int sequenceNumber;
+	unsigned char packetID;
+} SPLITPACKET_HL;
+#endif // REHLDS_SVEN
 #pragma pack(pop)
 
 const int NET_WS_MAX_FRAGMENTS = 5;

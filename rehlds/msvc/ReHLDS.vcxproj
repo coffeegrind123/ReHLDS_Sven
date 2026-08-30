@@ -72,6 +72,7 @@
     <ClCompile Include="..\engine\sv_main.cpp" />
     <ClCompile Include="..\engine\sv_move.cpp" />
     <ClCompile Include="..\engine\sv_phys.cpp" />
+    <ClCompile Include="..\engine\sv_proto.cpp" />
     <ClCompile Include="..\engine\sv_pmove.cpp" />
     <ClCompile Include="..\engine\sv_remoteaccess.cpp" />
     <ClCompile Include="..\engine\sv_steam3.cpp" />
@@ -181,6 +182,12 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="..\unittests\mathlib_tests.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug Play|Win32'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release Play|Win32'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="..\unittests\proto_tests.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug Play|Win32'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release Play|Win32'">true</ExcludedFromBuild>
@@ -358,6 +365,7 @@
     <ClInclude Include="..\engine\sv_log.h" />
     <ClInclude Include="..\engine\sv_move.h" />
     <ClInclude Include="..\engine\sv_phys.h" />
+    <ClInclude Include="..\engine\sv_proto.h" />
     <ClInclude Include="..\engine\sv_pmove.h" />
     <ClInclude Include="..\engine\sv_remoteaccess.h" />
     <ClInclude Include="..\engine\sv_steam3.h" />
@@ -810,4 +818,4 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
-</Project>
+</Project>

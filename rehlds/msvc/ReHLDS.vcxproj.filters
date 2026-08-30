@@ -149,6 +149,9 @@
     <ClCompile Include="..\engine\sv_phys.cpp">
       <Filter>engine\server</Filter>
     </ClCompile>
+    <ClCompile Include="..\engine\sv_proto.cpp">
+      <Filter>engine\server</Filter>
+    </ClCompile>
     <ClCompile Include="..\engine\sv_move.cpp">
       <Filter>engine\common</Filter>
     </ClCompile>
@@ -291,6 +294,9 @@
       <Filter>engine</Filter>
     </ClCompile>
     <ClCompile Include="..\unittests\mathlib_tests.cpp">
+      <Filter>unittests</Filter>
+    </ClCompile>
+    <ClCompile Include="..\unittests\proto_tests.cpp">
       <Filter>unittests</Filter>
     </ClCompile>
     <ClCompile Include="..\engine\delta_jit.cpp">
@@ -638,6 +644,9 @@
       <Filter>engine\common</Filter>
     </ClInclude>
     <ClInclude Include="..\engine\sv_phys.h">
+      <Filter>engine\server</Filter>
+    </ClInclude>
+    <ClInclude Include="..\engine\sv_proto.h">
       <Filter>engine\server</Filter>
     </ClInclude>
     <ClInclude Include="..\engine\sv_move.h">
@@ -1096,4 +1105,4 @@
     <ClInclude Include="..\public\steam\isteambilling.h" />
     <ClInclude Include="..\public\steam\isteamunifiedmessages.h" />
   </ItemGroup>
-</Project>
+</Project>

@@ -62,6 +62,85 @@ int r_visframecount;
 
 sizebuf_t gMsgBuffer = { "MessageBegin/End", 0, gMsgData, sizeof(gMsgData), 0 };
 
+#ifdef REHLDS_SVEN
+// ---------------------------------------------------------------------------
+// User messages and the two coordinate widths
+//
+// A user message is composed ONCE by the game DLL into gMsgBuffer and then
+// copied to every recipient, so it cannot simply be written in the recipient's
+// dialect -- by the time we know the recipient, WRITE_COORD has already run.
+//
+// gMsgBuffer therefore always holds the WIDE (Sven, 4-byte) form, and every
+// WRITE_COORD records where it put its four bytes. Copying to a Half-Life
+// client replays the buffer through those offsets, emitting each coordinate as
+// a short. Composing narrow and widening would lose the range Sven maps
+// actually use; composing wide and narrowing only loses what a Half-Life
+// client could never have represented anyway.
+//
+// This is the half of the coordinate problem that an MSG_WriteCoord fix does
+// NOT reach: a client DLL parses user-message payloads with its own reader
+// (parsemsg.cpp), which knows nothing about any of this and just reads shorts.
+// ---------------------------------------------------------------------------
+
+static int gMsgCoordOffsets[MAX_USER_MSG_DATA / 4];
+static int gMsgCoordCount;
+
+// The buffers one shared-destination write has to be composed into: the native
+// one, and its Half-Life twin when it has one. Terminated by a null entry, so
+// callers are a plain `for (int i = 0; pass[i]; i++)`.
+struct sv_shared_pass_t
+{
+	sizebuf_t *bufs[3];
+
+	explicit sv_shared_pass_t(sizebuf_t *primary)
+	{
+		bufs[0] = primary;
+		bufs[1] = SV_Proto_TwinOf(primary);
+		bufs[2] = nullptr;
+	}
+
+	sizebuf_t *operator[](int i) const { return bufs[i]; }
+};
+
+// Rewrite gMsgBuffer's payload into `out` with 2-byte coordinates.
+// Returns the narrowed length, or -1 if it will not fit.
+static int PF_NarrowUserMsgForHL(byte *out, int outmax)
+{
+	const byte *in = gMsgBuffer.data;
+	int inlen = gMsgBuffer.cursize;
+	int src = 0, dst = 0;
+
+	for (int c = 0; c < gMsgCoordCount; c++)
+	{
+		int at = gMsgCoordOffsets[c];
+
+		// A coordinate recorded past the end means the buffer was rewound
+		// (overflow, or a message abandoned mid-write); stop trusting the log.
+		if (at < src || at + 4 > inlen)
+			return -1;
+
+		int span = at - src;
+		if (dst + span + 2 > outmax)
+			return -1;
+
+		Q_memcpy(out + dst, in + src, span);
+		dst += span;
+
+		int32 wide = *(const int32 *)(in + at);
+		*(int16 *)(out + dst) = (int16)Q_clamp(wide, -32768, 32767);
+		dst += 2;
+		src = at + 4;
+	}
+
+	int tail = inlen - src;
+	if (tail < 0 || dst + tail > outmax)
+		return -1;
+
+	Q_memcpy(out + dst, in + src, tail);
+	return dst + tail;
+}
+#endif // REHLDS_SVEN
+
 void EXT_FUNC PF_makevectors_I(const float *rgflVector)
 {
 	AngleVectors(rgflVector, gGlobalVariables.v_forward, gGlobalVariables.v_right, gGlobalVariables.v_up);
@@ -297,6 +376,14 @@ void EXT_FUNC PF_ambientsound_I(edict_t *entity, float *pos, const char *samp, f
 	if (!(fFlags & SND_FL_SPAWNING))
 		pout = &g_psv.datagram;
 
+#ifdef REHLDS_SVEN
+	// Byte-aligned coordinates, into a buffer every client is served from, so
+	// it has to be composed in both encodings (14 bytes stock, 20 under Sven).
+	const sv_shared_pass_t passes(pout);
+	for (int pass = 0; passes[pass]; pass++)
+	{
+	pout = passes[pass];
+#endif
 	MSG_WriteByte(pout, svc_spawnstaticsound);
 	MSG_WriteCoord(pout, pos[0]);
 	MSG_WriteCoord(pout, pos[1]);
@@ -308,6 +395,9 @@ void EXT_FUNC PF_ambientsound_I(edict_t *entity, float *pos, const char *samp, f
 	MSG_WriteShort(pout, ent);
 	MSG_WriteByte(pout, pitch);
 	MSG_WriteByte(pout, fFlags);
+#ifdef REHLDS_SVEN
+	}
+#endif
 }
 
 void EXT_FUNC PF_sound_I(edict_t *entity, int channel, const char *sample, float volume, float attenuation, int fFlags, int pitch)
@@ -2430,6 +2520,9 @@ void EXT_FUNC PF_MessageBegin_I(int msg_dest, int msg_type, const float *pOrigin
 
 	gMsgBuffer.flags = SIZEBUF_ALLOW_OVERFLOW;
 	gMsgBuffer.cursize = 0;
+#ifdef REHLDS_SVEN
+	gMsgCoordCount = 0;
+#endif
 }
 
 // Validates user message type and checks to see if it's variable length
@@ -2477,7 +2570,45 @@ void WriteMessageToBuffer(qboolean isVariableLengthMsg, sizebuf_t *buf)
 	if (!buf->data)
 		return;
 
-	if ((gMsgDest == MSG_BROADCAST && !SZ_HasSpace(buf, gMsgBuffer.cursize)))
+	const byte *payload = gMsgBuffer.data;
+	int payloadLen = gMsgBuffer.cursize;
+
+#ifdef REHLDS_SVEN
+	byte narrowed[MAX_USER_MSG_DATA];
+	const bool destIsHL = MSG_BufIsHL(buf);
+
+	if (destIsHL)
+	{
+		// Half-Life clients are told every user message is variable-length
+		// (SV_SendUserReg), because narrowing coordinates changes the payload
+		// length while the size advertised at signon describes the wide layout.
+		isVariableLengthMsg = TRUE;
+
+		if (gMsgCoordCount > 0)
+		{
+			payloadLen = PF_NarrowUserMsgForHL(narrowed, sizeof(narrowed));
+			if (payloadLen < 0)
+			{
+				Con_DPrintf("%s: user msg %d could not be narrowed for a Half-Life client\n",
+					__func__, gMsgType);
+				return;
+			}
+			payload = narrowed;
+		}
+
+		if (payloadLen > 255)
+		{
+			// The length prefix is one byte in that dialect, so there is no
+			// framing for this message at all. Dropping it keeps the stream
+			// aligned; sending a truncated length would not.
+			Con_DPrintf("%s: user msg %d is %d bytes, too large for a Half-Life client\n",
+				__func__, gMsgType, payloadLen);
+			return;
+		}
+	}
+#endif // REHLDS_SVEN
+
+	if ((gMsgDest == MSG_BROADCAST && !SZ_HasSpace(buf, payloadLen)))
 		return;
 
 	// With `REHLDS_FIXES` enabled meaning of `svc_startofusermessages` changed a bit: now it is an id of the first user message
@@ -2517,14 +2648,17 @@ void WriteMessageToBuffer(qboolean isVariableLengthMsg, sizebuf_t *buf)
 #ifdef REHLDS_SVEN
 		// Sven Co-op encodes the var-length user message size as a short,
 		// since its user messages can exceed 255 bytes.
-		MSG_WriteShort(buf, gMsgBuffer.cursize);
+		if (destIsHL)
+			MSG_WriteByte(buf, payloadLen);
+		else
+			MSG_WriteShort(buf, payloadLen);
 #else // REHLDS_SVEN
-		MSG_WriteByte(buf, gMsgBuffer.cursize);
+		MSG_WriteByte(buf, payloadLen);
 #endif // REHLDS_SVEN
 	}
 
 	// Dump buffered data into message stream
-	MSG_WriteBuf(buf, gMsgBuffer.cursize, gMsgBuffer.data);
+	MSG_WriteBuf(buf, payloadLen, (void *)payload);
 }
 
 void EXT_FUNC PF_MessageEnd_I(void)
@@ -2622,6 +2756,16 @@ void EXT_FUNC PF_MessageEnd_I(void)
 	{
 		sizebuf_t *pBuffer = WriteDest_Parm(gMsgDest);
 		WriteMessageToBuffer(isVariableLengthMsg, pBuffer);
+
+#ifdef REHLDS_SVEN
+		// MSG_INIT / MSG_BROADCAST / MSG_PVS / MSG_PAS / MSG_SPEC all land in a
+		// buffer that is replayed to every client, so the message has to exist
+		// in both encodings. MSG_ONE and MSG_ONE_UNRELIABLE already resolve to
+		// a per-client buffer and have no twin.
+		sizebuf_t *pTwin = SV_Proto_TwinOf(pBuffer);
+		if (pTwin)
+			WriteMessageToBuffer(isVariableLengthMsg, pTwin);
+#endif
 	}
 
 	switch (gMsgDest)
@@ -2688,11 +2832,13 @@ void EXT_FUNC PF_WriteCoord_I(float flValue)
 	if (!gMsgStarted)
 		Sys_Error("%s: called with no active message\n", __func__);
 #ifdef REHLDS_SVEN
-	MSG_WriteLong
+	if (gMsgCoordCount < (int)ARRAYSIZE(gMsgCoordOffsets))
+		gMsgCoordOffsets[gMsgCoordCount++] = gMsgBuffer.cursize;
+
+	MSG_WriteLong(&gMsgBuffer, (int)(flValue * 8.0));
 #else //!REHLDS_SVEN
-	MSG_WriteShort
+	MSG_WriteShort(&gMsgBuffer, (int)(flValue * 8.0));
 #endif //REHLDS_SVEN
-		(&gMsgBuffer, (int)(flValue * 8.0));
 }
 
 void EXT_FUNC PF_WriteString_I(const char *sz)
@@ -2711,44 +2857,71 @@ void EXT_FUNC PF_WriteEntity_I(int iValue)
 
 void EXT_FUNC PF_makestatic_I(edict_t *ent)
 {
-	MSG_WriteByte(&g_psv.signon, svc_spawnstatic);
-	MSG_WriteShort(&g_psv.signon, SV_ModelIndex(&pr_strings[ent->v.model]));
-	MSG_WriteByte(&g_psv.signon, ent->v.sequence);
-	MSG_WriteByte(&g_psv.signon, (int)ent->v.frame);
-	MSG_WriteWord(&g_psv.signon, ent->v.colormap);
-	MSG_WriteByte(&g_psv.signon, ent->v.skin);
+#ifdef REHLDS_SVEN
+	// Carries coordinates into the signon block, which is replayed verbatim to
+	// every client, so both encodings have to exist.
+	const sv_shared_pass_t passes(&g_psv.signon);
+	for (int pass = 0; passes[pass]; pass++)
+	{
+	sizebuf_t *const sb = passes[pass];
+#else
+	sizebuf_t *const sb = &g_psv.signon;
+#endif
+	MSG_WriteByte(sb, svc_spawnstatic);
+	MSG_WriteShort(sb, SV_ModelIndex(&pr_strings[ent->v.model]));
+	MSG_WriteByte(sb, ent->v.sequence);
+	MSG_WriteByte(sb, (int)ent->v.frame);
+	MSG_WriteWord(sb, ent->v.colormap);
+	MSG_WriteByte(sb, ent->v.skin);
 
 	for (int i = 0; i < 3; i++)
 	{
-		MSG_WriteCoord(&g_psv.signon, ent->v.origin[i]);
-		MSG_WriteAngle(&g_psv.signon, ent->v.angles[i]);
+		MSG_WriteCoord(sb, ent->v.origin[i]);
+		MSG_WriteAngle(sb, ent->v.angles[i]);
 	}
 
-	MSG_WriteByte(&g_psv.signon, ent->v.rendermode);
+	MSG_WriteByte(sb, ent->v.rendermode);
 	if (ent->v.rendermode)
 	{
-		MSG_WriteByte(&g_psv.signon, (int)ent->v.renderamt);
-		MSG_WriteByte(&g_psv.signon, (int)ent->v.rendercolor[0]);
-		MSG_WriteByte(&g_psv.signon, (int)ent->v.rendercolor[1]);
-		MSG_WriteByte(&g_psv.signon, (int)ent->v.rendercolor[2]);
-		MSG_WriteByte(&g_psv.signon, ent->v.renderfx);
+		MSG_WriteByte(sb, (int)ent->v.renderamt);
+		MSG_WriteByte(sb, (int)ent->v.rendercolor[0]);
+		MSG_WriteByte(sb, (int)ent->v.rendercolor[1]);
+		MSG_WriteByte(sb, (int)ent->v.rendercolor[2]);
+		MSG_WriteByte(sb, ent->v.renderfx);
 	}
+#ifdef REHLDS_SVEN
+	}
+#endif
 
 	ED_Free(ent);
 }
 
 void EXT_FUNC PF_StaticDecal(const float *origin, int decalIndex, int entityIndex, int modelIndex)
 {
-	MSG_WriteByte(&g_psv.signon, svc_temp_entity);
-	MSG_WriteByte(&g_psv.signon, TE_BSPDECAL);
-	MSG_WriteCoord(&g_psv.signon, *origin);
-	MSG_WriteCoord(&g_psv.signon, origin[1]);
-	MSG_WriteCoord(&g_psv.signon, origin[2]);
-	MSG_WriteShort(&g_psv.signon, decalIndex);
-	MSG_WriteShort(&g_psv.signon, entityIndex);
+#ifdef REHLDS_SVEN
+	// TE_BSPDECAL reads the entity index at a fixed offset after the coord
+	// triple, so widening the coords moves that offset -- another reason this
+	// has to be composed per dialect rather than patched on delivery.
+	const sv_shared_pass_t passes(&g_psv.signon);
+	for (int pass = 0; passes[pass]; pass++)
+	{
+	sizebuf_t *const sb = passes[pass];
+#else
+	sizebuf_t *const sb = &g_psv.signon;
+#endif
+	MSG_WriteByte(sb, svc_temp_entity);
+	MSG_WriteByte(sb, TE_BSPDECAL);
+	MSG_WriteCoord(sb, *origin);
+	MSG_WriteCoord(sb, origin[1]);
+	MSG_WriteCoord(sb, origin[2]);
+	MSG_WriteShort(sb, decalIndex);
+	MSG_WriteShort(sb, entityIndex);
 
 	if (entityIndex)
-		MSG_WriteShort(&g_psv.signon, modelIndex);
+		MSG_WriteShort(sb, modelIndex);
+#ifdef REHLDS_SVEN
+	}
+#endif
 }
 
 void EXT_FUNC PF_setspawnparms_I(edict_t *ent)
