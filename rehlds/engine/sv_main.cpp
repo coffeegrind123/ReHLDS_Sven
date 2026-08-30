@@ -689,7 +689,11 @@ static void SV_StartParticle_ToBuffer(sizebuf_t *sb, const vec_t *org, const vec
 {
 	// 16 is the stock size; a Sven-encoded one is 6 bytes longer because each
 	// coordinate is a long rather than a short.
+#ifdef REHLDS_SVEN
 	const int needed = MSG_BufIsHL(sb) ? 16 : 22;
+#else
+	const int needed = 16;
+#endif
 
 	if (sb->cursize + needed > sb->maxsize)
 		return;
