@@ -5319,16 +5319,27 @@ void SV_WriteEntitiesToClient(client_t *client, sizebuf_t *msg)
 		curPack->num_entities = PROTO_HL_MAX_PACKET_ENTITIES;
 	}
 
-	// Clamp before the pack is both emitted and recorded as this client's frame,
-	// so the delta baseline the next frame is computed against agrees with what
-	// the client was actually told. See PROTO_HL_MAX_MODELS.
+	// Drop entities the client cannot resolve, before the pack is both emitted
+	// and recorded as this client's frame, so the delta baseline the next frame
+	// is computed against agrees with what it was actually told.
+	//
+	// Dropping rather than zeroing the model index: nothing precaches index 0,
+	// so a zeroed entity leaves the client holding a null model_t, which its
+	// renderer dereferences without checking.
 	if (SV_Proto_ClientIsHL(client))
 	{
+		int kept = 0;
 		for (int i = 0; i < curPack->num_entities; i++)
 		{
-			if (!SV_Proto_HLCanAddressModel(curPack->entities[i].modelindex))
-				curPack->entities[i].modelindex = 0;
+			entity_state_t *es = &curPack->entities[i];
+			if (es->modelindex && !SV_Proto_HLModelUsable(es->modelindex))
+				continue;
+
+			if (kept != i)
+				curPack->entities[kept] = *es;
+			kept++;
 		}
+		curPack->num_entities = kept;
 	}
 #endif // REHLDS_SVEN
 
@@ -6309,6 +6320,16 @@ static void SV_EmitBaselines(sizebuf_t *msg)
 		if (!svent->free && (g_psvs.maxclients >= entnum || svent->v.modelindex))
 		{
 #ifdef REHLDS_SVEN
+			// Skip before writing anything: a baseline naming a model the client
+			// was never told about leaves it holding a null model_t, and the
+			// renderer dereferences that without checking. Nothing is written for
+			// this entity, which is the same as it simply having no baseline.
+			{
+				const int mi = g_psv.baselines[entnum].modelindex;
+				if (MSG_WriteIsHL() && mi && !SV_Proto_HLModelUsable(mi))
+					continue;
+			}
+
 			PROTO_BITS(ENTITY_NUMBER, entnum);
 #else //!REHLDS_SVEN
 			MSG_WriteBits(entnum, 11);
@@ -6324,24 +6345,7 @@ static void SV_EmitBaselines(sizebuf_t *msg)
 					pDelta = g_pentitydelta;
 			}
 
-#ifdef REHLDS_SVEN
-			// Same ceiling as the resource list, reached from the other side: a
-			// model index the client has no array slot for is sent as "no model"
-			// rather than as a number it will index cl.model_precache[] with.
-			entity_state_t hlbase;
-			const entity_state_t *pBase = &g_psv.baselines[entnum];
-
-			if (MSG_WriteIsHL() && !SV_Proto_HLCanAddressModel(pBase->modelindex))
-			{
-				hlbase = *pBase;
-				hlbase.modelindex = 0;
-				pBase = &hlbase;
-			}
-
-			DELTA_WriteDelta((byte *)&nullstate, (byte *)pBase, TRUE, pDelta, NULL);
-#else //!REHLDS_SVEN
 			DELTA_WriteDelta((byte *)&nullstate, (byte *)&(g_psv.baselines[entnum]), TRUE, pDelta, NULL);
-#endif //REHLDS_SVEN
 		}
 	}
 
