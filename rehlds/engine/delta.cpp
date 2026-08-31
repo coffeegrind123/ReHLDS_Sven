@@ -856,7 +856,9 @@ qboolean _DELTA_WriteDelta(unsigned char *from, unsigned char *to, qboolean forc
 		// entity_state_player_t 51, weapon_data_t 22, custom_entity_state_t 20,
 		// usercmd_t 15, event_t 14), so Half-Life clients lose leg animation on
 		// non-player entities and nothing else.
-		if (MSG_WriteIsHL() && pFields->fieldCount > PROTO_HL_MAX_DELTA_FIELDS)
+		const bool deltaTrimmed = MSG_WriteIsHL() && pFields->fieldCount > PROTO_HL_MAX_DELTA_FIELDS;
+
+		if (deltaTrimmed)
 		{
 			for (int f = PROTO_HL_MAX_DELTA_FIELDS; f < pFields->fieldCount; f++)
 				DELTA_UnsetFieldByIndex(pFields, f);
@@ -868,6 +870,44 @@ qboolean _DELTA_WriteDelta(unsigned char *from, unsigned char *to, qboolean forc
 #else
 		DELTA_SetSendFlagBits(pFields, bits, &bytecount);
 #endif
+
+#ifdef REHLDS_SVEN
+		if (deltaTrimmed)
+		{
+			// DELTAJit_SetSendFlagBits does not recompute the byte count: it
+			// hands back markedFieldsMaskSize, cached when the fields were
+			// MARKED, and DELTAJit_UnsetFieldByIndex only clears the mask bit.
+			// So after trimming field 56 the count still says 8 -- and 8 written
+			// in the three bits a Half-Life client reads is 0. The client then
+			// reads no mask at all and every bit after it is misaligned: not a
+			// lost field, a whole-stream desync, and silent on the wire.
+			//
+			// Measured: a client parsed 178 of 503 spawn baselines in perfect
+			// ascending order and then read 769, 101, 4, 1164, 1968 and died on
+			// "CL_EntityNum: 1968 is an invalid number". The first entity to
+			// mark entity_state_t::gaitsequence is where it came apart.
+			//
+			// Recompute from the mask that is actually going out.
+			bytecount = 0;
+			for (int b = (int)sizeof(bits) - 1; b >= 0; b--)
+			{
+				if (((byte *)bits)[b] != 0)
+				{
+					bytecount = b + 1;
+					break;
+				}
+			}
+		}
+
+		// Never let a count that cannot be expressed reach the wire silently.
+		if (MSG_WriteIsHL() && bytecount > (1 << PROTO_BITS_HL_DELTA_BYTECOUNT) - 1)
+		{
+			Con_Printf("%s: WARNING: %d mask bytes cannot be sent to a Half-Life "
+				"client, clamping to %d\n", __func__, bytecount,
+				(1 << PROTO_BITS_HL_DELTA_BYTECOUNT) - 1);
+			bytecount = (1 << PROTO_BITS_HL_DELTA_BYTECOUNT) - 1;
+		}
+#endif // REHLDS_SVEN
 
 		if (callback)
 			callback();
