@@ -1364,22 +1364,11 @@ void EXT_FUNC SV_SendResources_internal(sizebuf_t *msg)
 #else // REHLDS_FIXES
 	resource_t *r = g_psv.resourcelist;
 #endif
-#ifdef REHLDS_SVEN
-	int resWritten = 0;
-#endif
 	for (int i = 0; i < g_psv.num_resources; i++, r++)
 	{
 #ifdef REHLDS_SVEN
-		if (resIsHL)
-		{
-			if (!SV_Proto_HLCanAddressResource(r))
-				continue;
-
-			// Positional cap as well as the per-index one: the count above stops
-			// at PROTO_HL_MAX_RESOURCE_LIST, so the body has to stop there too.
-			if (resWritten++ >= resCount)
-				break;
-		}
+		if (resIsHL && !SV_Proto_HLResourceSent(i))
+			continue;
 #endif
 
 		MSG_WriteBits(r->type, 4);

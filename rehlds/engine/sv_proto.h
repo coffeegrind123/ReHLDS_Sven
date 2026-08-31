@@ -204,6 +204,8 @@ void SV_Proto_LogConnect(const netadr_t *adr, const char *protinfo, const char *
 struct resource_s;
 bool SV_Proto_HLCanAddressResource(const struct resource_s *r);
 int SV_Proto_HLResourceCap(void);
+void SV_Proto_HLBuildResourceMask(void);
+bool SV_Proto_HLResourceSent(int i);
 int SV_Proto_HLResourceCount(void);
 int SV_Proto_HLResourceRealIndex(int hlIndex);
 
