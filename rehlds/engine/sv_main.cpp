@@ -4422,6 +4422,31 @@ void SV_EmitEvents_internal(client_t *cl, packet_entities_t *pack, sizebuf_t *ms
 
 	es = &cl->events;
 
+#ifdef REHLDS_SVEN
+	// Drop events this client cannot resolve before anything counts them. The
+	// index below is written in 10 bits, but a stock client's
+	// cl.event_precache[] is 256 entries and holds only the event scripts that
+	// survived the resource filter -- so an index it was never sent is either
+	// past the end of that array or a null entry inside it, the same class of
+	// fault as the model indices in fb16961. Clearing the queue entry here
+	// keeps the count, the writer and the queue in agreement, and stops a
+	// permanently unsendable event from sitting in the queue forever.
+	if (SV_Proto_ClientIsHL(cl))
+	{
+		for (ev = 0; ev < MAX_EVENT_QUEUE; ev++)
+		{
+			info = &es->ei[ev];
+
+			if (info->index != 0 && !SV_Proto_HLEventUsable(info->index))
+			{
+				info->index = 0;
+				info->packet_index = -1;
+				info->entity_index = -1;
+			}
+		}
+	}
+#endif // REHLDS_SVEN
+
 	for (ev = 0; ev < MAX_EVENT_QUEUE; ev++)
 	{
 		info = &es->ei[ev];

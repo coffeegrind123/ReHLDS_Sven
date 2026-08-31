@@ -271,6 +271,55 @@ bool SV_Proto_HLCanAddressResource(const struct resource_s *r)
 	}
 }
 
+// The events/*.sc that ship inside retail Half-Life, from a stock valve/events
+// listing. A client already holding these never asks the server for them, so
+// they stay in the list even though this server cannot transmit them.
+static const char *const s_hlStockEvents[] =
+{
+	"events/crossbow1.sc",	"events/crossbow2.sc",	"events/crowbar.sc",
+	"events/egon_fire.sc",	"events/egon_stop.sc",	"events/firehornet.sc",
+	"events/gauss.sc",	"events/gaussspin.sc",	"events/glock1.sc",
+	"events/glock2.sc",	"events/mp5.sc",	"events/mp52.sc",
+	"events/python.sc",	"events/rpg.sc",	"events/shotgun1.sc",
+	"events/shotgun2.sc",	"events/snarkfire.sc",	"events/train.sc",
+	"events/tripfire.sc",	"events/vehicle.sc",
+};
+
+static bool SV_Proto_HLIsStockEvent(const char *name)
+{
+	for (int i = 0; i < (int)ARRAYSIZE(s_hlStockEvents); i++)
+	{
+		if (!Q_stricmp(name, s_hlStockEvents[i]))
+			return true;
+	}
+
+	return false;
+}
+
+bool SV_Proto_HLCanObtainResource(const struct resource_s *r)
+{
+	if (!r)
+		return false;
+
+	// Everything except an event script degrades quietly when it is missing:
+	// the client warns and carries on. An event script does not -- the engine
+	// treats it as fatal and drops the connection during precache.
+	if (r->type != t_eventscript)
+		return true;
+
+	if (SV_Proto_HLIsStockEvent(r->szFileName))
+		return true;
+
+	// Measured, not assumed: the client asks for exactly the scripts it lacks,
+	// and this server answered svc_filetxferfailed for every Sven-specific one
+	// because svencoop/events holds only muzzle_*.txt. Withhold what cannot be
+	// handed over rather than naming it and letting the client die asking.
+	if (sv_allow_download.value == 0.0f)
+		return false;
+
+	return FS_FileExists(r->szFileName) != 0;
+}
+
 int SV_Proto_HLResourceCap(void)
 {
 	int cap = (int)sv_proto_hl_max_resources.value;
@@ -299,6 +348,9 @@ static int s_hlResCount = 0;
 // never precached by anyone, so "no model" cannot be expressed that way either
 // -- an entity whose model is missing has to be withheld, not zeroed.
 static byte s_hlModelSent[(PROTO_HL_MAX_MODELS + 7) / 8];
+
+// Ditto for event indices, consulted by SV_EmitEvents.
+static byte s_hlEventSent[(PROTO_HL_MAX_EVENTS + 7) / 8];
 static int s_hlMaskBuiltFor = -1;
 static float s_hlMaskBuiltCap = -1.0f;
 
@@ -326,10 +378,11 @@ void SV_Proto_HLBuildResourceMask(void)
 
 	Q_memset(s_hlResMask, 0, sizeof(s_hlResMask));
 	Q_memset(s_hlModelSent, 0, sizeof(s_hlModelSent));
+	Q_memset(s_hlEventSent, 0, sizeof(s_hlEventSent));
 
 	for (int i = 0; i < g_psv.num_resources && i < RESOURCE_MAX_COUNT; i++)
 	{
-		if (SV_Proto_HLCanAddressResource(&base[i]))
+		if (SV_Proto_HLCanAddressResource(&base[i]) && SV_Proto_HLCanObtainResource(&base[i]))
 		{
 			SV_Proto_MaskSet(i, true);
 			kept++;
@@ -356,6 +409,15 @@ void SV_Proto_HLBuildResourceMask(void)
 	{
 		if (!SV_Proto_HLResourceSent(i))
 			continue;
+
+		if (base[i].type == t_eventscript)
+		{
+			const int ei = base[i].nIndex;
+			if (ei > 0 && ei < PROTO_HL_MAX_EVENTS)
+				s_hlEventSent[ei >> 3] |= (1 << (ei & 7));
+
+			continue;
+		}
 
 		if (base[i].type != t_model && base[i].type != t_world)
 			continue;
@@ -385,6 +447,15 @@ bool SV_Proto_HLModelUsable(int modelindex)
 
 	SV_Proto_HLEnsureResourceMask();
 	return (s_hlModelSent[modelindex >> 3] & (1 << (modelindex & 7))) != 0;
+}
+
+bool SV_Proto_HLEventUsable(int eventindex)
+{
+	if (eventindex <= 0 || eventindex >= PROTO_HL_MAX_EVENTS)
+		return false;
+
+	SV_Proto_HLEnsureResourceMask();
+	return (s_hlEventSent[eventindex >> 3] & (1 << (eventindex & 7))) != 0;
 }
 
 int SV_Proto_HLResourceCount(void)

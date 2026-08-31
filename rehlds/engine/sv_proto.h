@@ -203,6 +203,15 @@ void SV_Proto_LogConnect(const netadr_t *adr, const char *protinfo, const char *
 // back for anything that reads an index off the wire.
 struct resource_s;
 bool SV_Proto_HLCanAddressResource(const struct resource_s *r);
+
+// Whether a Half-Life client can ever come to possess a resource at all. Only
+// event scripts are load-bearing here: hw.dll refuses to enter a map when an
+// events/*.sc it was told to precache is neither on disk nor obtainable from
+// the server ("Cannot continue without script events/<x>.sc, disconnecting."),
+// and Sven Co-op's DEDICATED SERVER package carries no .sc files whatsoever,
+// so every Sven-specific event is unobtainable by construction.
+bool SV_Proto_HLCanObtainResource(const struct resource_s *r);
+
 int SV_Proto_HLResourceCap(void);
 void SV_Proto_HLBuildResourceMask(void);
 bool SV_Proto_HLResourceSent(int i);
@@ -214,6 +223,12 @@ int SV_Proto_HLResourceRealIndex(int hlIndex);
 // index to 0 does not work -- nothing precaches index 0, so the client is left
 // dereferencing a null model_t and faults inside hw.dll.
 bool SV_Proto_HLModelUsable(int modelindex);
+
+// Same question for an event index. SV_EmitEvents writes it in 10 bits, but a
+// stock client's cl.event_precache[] is 256 entries and only holds the events
+// that survived the resource filter -- so an index it was not sent is either
+// past the end of that array or a null entry inside it.
+bool SV_Proto_HLEventUsable(int eventindex);
 
 const char *SV_Proto_DialectName(proto_dialect_t dialect);
 
