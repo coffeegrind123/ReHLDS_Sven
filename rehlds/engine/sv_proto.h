@@ -123,6 +123,27 @@ enum
 #define PROTO_HL_MAX_LIGHTSTYLES	64
 #define PROTO_HL_MAX_PACKET_ENTITIES	256
 
+// ---------------------------------------------------------------------------
+// How many entities a retail Half-Life client can address.
+//
+// Not a wire width either: the index fits in the 11 bits a Half-Life client
+// reads, but cl_entities[] is allocated once from
+//
+//     base + 15 * (maxclients - 1)
+//
+// where base is the -num_edicts switch, default 1200. Read out of hw.dll
+// (Half-Life 25th anniversary) at CL_AllocEntities; with maxclients 8 the
+// client reported 1305, which matches. Anything past it is fatal on arrival:
+//
+//     Host_Error: CL_EntityNum: 1968 is an invalid number, cl.max_edicts is 1305
+//
+// Sven Co-op declares 8192 edicts, so a busy map names entities past this
+// routinely. sv_proto_hl_max_edicts overrides the assumed base for servers
+// whose players run a non-default -num_edicts.
+// ---------------------------------------------------------------------------
+#define PROTO_HL_NUM_EDICTS_DEFAULT	1200
+#define PROTO_HL_EDICTS_PER_CLIENT	15
+
 // The stock client's resource array itself -- MAX_RESOURCE_LIST from custom.h,
 // which this fork did NOT widen even though it raised RESOURCE_MAX_COUNT on the
 // server side. Filtering the list by addressable index is not enough on its own:
@@ -145,6 +166,7 @@ extern cvar_t sv_proto_fallback;	// dialect to assume when detection is inconclu
 extern cvar_t sv_proto_log;		// 0 off, 1 verdicts, 2 full hex dumps
 extern cvar_t sv_proto_hl_gamedir;	// gamedir reported to Half-Life clients
 extern cvar_t sv_proto_hl_max_resources;	// cap on the resource list sent to them
+extern cvar_t sv_proto_hl_max_edicts;		// 0 = derive from PROTO_HL_NUM_EDICTS_DEFAULT
 
 void SV_Proto_Init(void);
 
@@ -229,6 +251,10 @@ bool SV_Proto_HLModelUsable(int modelindex);
 // that survived the resource filter -- so an index it was not sent is either
 // past the end of that array or a null entry inside it.
 bool SV_Proto_HLEventUsable(int eventindex);
+
+// And for an entity number. See PROTO_HL_NUM_EDICTS_DEFAULT.
+int SV_Proto_HLMaxEdicts(void);
+bool SV_Proto_HLEntityUsable(int entnum);
 
 const char *SV_Proto_DialectName(proto_dialect_t dialect);
 

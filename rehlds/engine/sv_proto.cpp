@@ -44,6 +44,10 @@ cvar_t sv_proto_hl_gamedir = { "sv_proto_hl_gamedir", "", FCVAR_SERVER, 0.0f, nu
 // gets further, or to bisect which resource a client dies on.
 cvar_t sv_proto_hl_max_resources = { "sv_proto_hl_max_resources", "1280", FCVAR_SERVER, 0.0f, nullptr };
 
+// The -num_edicts a Half-Life client is assumed to have been started with;
+// 0 uses its documented default. See PROTO_HL_NUM_EDICTS_DEFAULT.
+cvar_t sv_proto_hl_max_edicts = { "sv_proto_hl_max_edicts", "0", FCVAR_SERVER, 0.0f, nullptr };
+
 // Per-slot dialect. Deliberately NOT a client_t member: client_t is walked by
 // Metamod plugins that were compiled against the current layout, and growing
 // it would shift g_psvs.clients' stride under them.
@@ -102,6 +106,7 @@ void SV_Proto_Init(void)
 	Cvar_RegisterVariable(&sv_proto_log);
 	Cvar_RegisterVariable(&sv_proto_hl_gamedir);
 	Cvar_RegisterVariable(&sv_proto_hl_max_resources);
+	Cvar_RegisterVariable(&sv_proto_hl_max_edicts);
 
 	// Also done per map in SV_SpawnServer; do it here so the twins are never
 	// a null-data sizebuf, whatever order a caller reaches them in.
@@ -447,6 +452,24 @@ bool SV_Proto_HLModelUsable(int modelindex)
 
 	SV_Proto_HLEnsureResourceMask();
 	return (s_hlModelSent[modelindex >> 3] & (1 << (modelindex & 7))) != 0;
+}
+
+int SV_Proto_HLMaxEdicts(void)
+{
+	int n = (int)sv_proto_hl_max_edicts.value;
+
+	if (n <= 0)
+	{
+		const int players = Q_max(1, g_psvs.maxclients);
+		n = PROTO_HL_NUM_EDICTS_DEFAULT + PROTO_HL_EDICTS_PER_CLIENT * (players - 1);
+	}
+
+	return n;
+}
+
+bool SV_Proto_HLEntityUsable(int entnum)
+{
+	return entnum >= 0 && entnum < SV_Proto_HLMaxEdicts();
 }
 
 bool SV_Proto_HLEventUsable(int eventindex)
