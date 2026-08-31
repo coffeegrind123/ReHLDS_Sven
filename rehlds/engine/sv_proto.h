@@ -123,6 +123,14 @@ enum
 #define PROTO_HL_MAX_LIGHTSTYLES	64
 #define PROTO_HL_MAX_PACKET_ENTITIES	256
 
+// The stock client's resource array itself -- MAX_RESOURCE_LIST from custom.h,
+// which this fork did NOT widen even though it raised RESOURCE_MAX_COUNT on the
+// server side. Filtering the list by addressable index is not enough on its own:
+// svencoop/bm_sts still leaves 1296 entries, and CL_ParseResourceList fills
+// cl.resourcelist[1280] with however many the count says. That overrun happens
+// while the client is precaching, which is exactly where it died.
+#define PROTO_HL_MAX_RESOURCE_LIST	1280
+
 // ---------------------------------------------------------------------------
 // Per-client state
 // ---------------------------------------------------------------------------

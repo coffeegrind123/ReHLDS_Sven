@@ -260,7 +260,7 @@ int SV_Proto_HLResourceCount(void)
 	resource_t *r = SV_Proto_ResourceArray();
 	int n = 0;
 
-	for (int i = 0; i < g_psv.num_resources; i++, r++)
+	for (int i = 0; i < g_psv.num_resources && n < PROTO_HL_MAX_RESOURCE_LIST; i++, r++)
 	{
 		if (SV_Proto_HLCanAddressResource(r))
 			n++;
@@ -271,7 +271,7 @@ int SV_Proto_HLResourceCount(void)
 
 int SV_Proto_HLResourceRealIndex(int hlIndex)
 {
-	if (hlIndex < 0)
+	if (hlIndex < 0 || hlIndex >= PROTO_HL_MAX_RESOURCE_LIST)
 		return -1;
 
 	resource_t *r = SV_Proto_ResourceArray();
