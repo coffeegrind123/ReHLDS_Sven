@@ -6392,6 +6392,14 @@ static void SV_EmitBaselines(sizebuf_t *msg)
 
 			baseWritten++;
 
+			// The one thing worth seeing when a client desyncs mid-block: the
+			// exact sequence of numbers it should have read, and how big this
+			// entity's record is, so a client-side trace can be lined up
+			// against it rather than guessed at.
+			if (baseIsHL && sv_proto_log.value >= 2)
+				Con_Printf("[proto] baseline #%d ent %d type %d at byte %d\n",
+					baseWritten, entnum, g_psv.baselines[entnum].entityType, msg->cursize);
+
 			PROTO_BITS(ENTITY_NUMBER, entnum);
 #else //!REHLDS_SVEN
 			MSG_WriteBits(entnum, 11);
