@@ -2946,8 +2946,18 @@ void EXT_FUNC PF_makestatic_I(edict_t *ent)
 #else
 	sizebuf_t *const sb = &g_psv.signon;
 #endif
+	const int staticModel = SV_ModelIndex(&pr_strings[ent->v.model]);
+
+#ifdef REHLDS_SVEN
+	// A static entity naming a model the client was never told about leaves it
+	// holding a null model_t, which the renderer dereferences without checking.
+	// Omit the whole entity from that dialect's signon rather than emit it.
+	if (MSG_BufIsHL(sb) && staticModel && !SV_Proto_HLModelUsable(staticModel))
+		continue;
+#endif
+
 	MSG_WriteByte(sb, svc_spawnstatic);
-	MSG_WriteShort(sb, SV_ModelIndex(&pr_strings[ent->v.model]));
+	MSG_WriteShort(sb, staticModel);
 	MSG_WriteByte(sb, ent->v.sequence);
 	MSG_WriteByte(sb, (int)ent->v.frame);
 	MSG_WriteWord(sb, ent->v.colormap);
@@ -2988,6 +2998,13 @@ void EXT_FUNC PF_StaticDecal(const float *origin, int decalIndex, int entityInde
 #else
 	sizebuf_t *const sb = &g_psv.signon;
 #endif
+#ifdef REHLDS_SVEN
+	// Same rule: the decal rides on a brush model index, and naming one the
+	// client does not have is the same null model_t.
+	if (MSG_BufIsHL(sb) && entityIndex && modelIndex && !SV_Proto_HLModelUsable(modelIndex))
+		continue;
+#endif
+
 	MSG_WriteByte(sb, svc_temp_entity);
 	MSG_WriteByte(sb, TE_BSPDECAL);
 	MSG_WriteCoord(sb, *origin);
@@ -2998,6 +3015,8 @@ void EXT_FUNC PF_StaticDecal(const float *origin, int decalIndex, int entityInde
 
 	if (entityIndex)
 		MSG_WriteShort(sb, modelIndex);
+	// NOTE: the modelIndex above is checked by the caller-side guard below; a
+	// decal on a brush model the client lacks is dropped with that model.
 #ifdef REHLDS_SVEN
 	}
 #endif
