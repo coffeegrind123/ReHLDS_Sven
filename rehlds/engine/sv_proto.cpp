@@ -165,6 +165,15 @@ proto_dialect_t SV_Proto_GetClientDialect(int slot)
 	return s_clientDialect[slot];
 }
 
+bool SV_Proto_ClientDialectKnown(const client_t *cl)
+{
+	int slot = SV_Proto_ClientSlot(cl);
+	if (slot < 0)
+		return true;			// not a real client slot; nothing to wait for
+
+	return s_clientDialect[slot] != PROTO_DIALECT_UNKNOWN;
+}
+
 int SV_Proto_ClientSlot(const client_t *cl)
 {
 	if (!cl || !g_psvs.clients)
