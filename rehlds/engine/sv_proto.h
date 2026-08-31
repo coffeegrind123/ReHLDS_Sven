@@ -153,6 +153,11 @@ void SV_Proto_ResetClient(int slot);
 void SV_Proto_SetClientDialect(int slot, proto_dialect_t dialect, const char *why);
 proto_dialect_t SV_Proto_GetClientDialect(int slot);
 
+// Whether the probe has actually decided, as opposed to GetClientDialect's
+// "treat undecided as native". Nothing dialect-dependent may be emitted while
+// this is false.
+bool SV_Proto_ClientDialectKnown(const client_t *cl);
+
 // Resolve a client/netchan back to its dialect. Anything the engine cannot
 // attribute to a connected client is treated as native (Sven).
 int SV_Proto_ClientSlot(const client_t *cl);

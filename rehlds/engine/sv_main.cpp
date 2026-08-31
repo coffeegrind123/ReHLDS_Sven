@@ -2768,6 +2768,13 @@ void EXT_FUNC SV_ConnectClient_internal(void)
 	host_client->connected = TRUE;
 	host_client->uploading = FALSE;
 	host_client->fully_connected = FALSE;
+#ifdef REHLDS_SVEN
+	// A reconnecting slot kept the previous session's send_message, so the very
+	// next frame transmitted to a client that had not spoken yet -- which is
+	// how a packet went out before the dialect was known. Reset it with the
+	// rest of the connection state.
+	host_client->send_message = FALSE;
+#endif // REHLDS_SVEN
 
 #ifdef REHLDS_FIXES
 	host_client->m_bSentNewResponse = FALSE;
@@ -5627,6 +5634,19 @@ void SV_SendClientMessages(void)
 			cl->skip_message = FALSE;
 			continue;
 		}
+
+#ifdef REHLDS_SVEN
+		// Nothing dialect-dependent may leave before the probe has read this
+		// client's first netchan packet, and munging is chosen per dialect. An
+		// unmunged packet reaches a Half-Life client as garbage: at sequence 1
+		// the 16-byte padded keepalive unmunges to 00 01 19 5a 40 11 01 1a, and
+		// that leading 0x00 is svc_bad on the client's very first message.
+		//
+		// Nothing needs sending yet either. The client has asked for nothing
+		// until it sends "new", which is the packet that resolves the dialect.
+		if (!SV_Proto_ClientDialectKnown(cl))
+			continue;
+#endif // REHLDS_SVEN
 
 		if (host_limitlocal.value == 0.0f && cl->netchan.remote_address.type == NA_LOOPBACK)
 			cl->send_message = TRUE;
