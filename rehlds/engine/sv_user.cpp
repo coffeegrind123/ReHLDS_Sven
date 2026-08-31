@@ -120,6 +120,12 @@ void SV_ParseConsistencyResponse(client_t *pSenderClient)
 	while (MSG_ReadBits(1))
 	{
 		int idx = MSG_ReadBits(16);
+#ifdef REHLDS_SVEN
+		// A Half-Life client answers with positions in the filtered list it was
+		// sent, so map back before indexing the real array.
+		if (SV_Proto_ClientIsHL(host_client))
+			idx = SV_Proto_HLResourceRealIndex(idx);
+#endif
 		if (idx < 0 || idx >= g_psv.num_resources)
 		{
 			c = -1;
@@ -368,12 +374,29 @@ void SV_SendConsistencyList(sizebuf_t *msg)
 
 	MSG_WriteBits(1, 1);
 
+#ifdef REHLDS_SVEN
+	// The indices here are positions in the list the CLIENT received, and a
+	// Half-Life client received a filtered one (SV_SendResources_internal), so
+	// count positions the same way or every index past the first withheld
+	// resource points at the wrong file.
+	const bool consIsHL = MSG_WriteIsHL();
+	int pos = 0;
+#endif
+
 	for (int i = 0; i < g_psv.num_resources; i++, r++)
 	{
+#ifdef REHLDS_SVEN
+		if (consIsHL && !SV_Proto_HLCanAddressResource(r))
+			continue;
+
+		const int i_ = pos++;
+#else
+		const int i_ = i;
+#endif
 		if (r && (r->ucFlags & RES_CHECKFILE) != 0)
 		{
 			MSG_WriteBits(1, 1);
-			delta = i - lastcheck;
+			delta = i_ - lastcheck;
 
 			if (delta > 31)
 			{
@@ -381,9 +404,9 @@ void SV_SendConsistencyList(sizebuf_t *msg)
 #ifdef REHLDS_SVEN
 				// LIMIT (Half-Life): this writes the index, not a diff, at 10 bits,
 				// so a non-adjacent consistency index past 1023 cannot be expressed.
-				PROTO_BITS(CONSISTENCY_INDEX, i);
+				PROTO_BITS(CONSISTENCY_INDEX, i_);
 #else //!REHLDS_SVEN
-				MSG_WriteBits(i, 10);
+				MSG_WriteBits(i_, 10);
 #endif //REHLDS_SVEN
 			}
 			else
@@ -393,7 +416,7 @@ void SV_SendConsistencyList(sizebuf_t *msg)
 				MSG_WriteBits(delta, 5);
 			}
 
-			lastcheck = i;
+			lastcheck = i_;
 		}
 	}
 

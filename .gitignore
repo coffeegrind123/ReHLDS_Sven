@@ -22,3 +22,6 @@ build-stock/
 **/msvc/ipch
 
 rehlds/version/appversion.h
+
+# local scratch tooling, not part of the engine
+/tools/
