@@ -281,33 +281,84 @@ int SV_Proto_HLResourceCap(void)
 	return cap;
 }
 
-int SV_Proto_HLResourceCount(void)
+// Which resources are actually sent, as a bitmap over the server's array.
+//
+// A positional cap sacrifices whatever sorts last, and what sorts last is the
+// decals and event scripts -- so a trimmed client reaches the map and then dies
+// on "Used decal #68 without a name". Sacrifice by what the client DOES with a
+// resource instead: t_generic is a download hint it never precaches, so it goes
+// first and costs nothing on a server whose files it cannot fetch anyway.
+// On svencoop/abandoned that alone takes 1280 entries to 768, which fits, so
+// every model, decal, sound and event survives.
+static byte s_hlResMask[(RESOURCE_MAX_COUNT + 7) / 8];
+static int s_hlResCount = 0;
+
+static inline void SV_Proto_MaskSet(int i, bool on)
 {
-	resource_t *r = SV_Proto_ResourceArray();
-	int n = 0;
+	if (on)
+		s_hlResMask[i >> 3] |= (1 << (i & 7));
+	else
+		s_hlResMask[i >> 3] &= ~(1 << (i & 7));
+}
 
+bool SV_Proto_HLResourceSent(int i)
+{
+	if (i < 0 || i >= g_psv.num_resources)
+		return false;
+
+	return (s_hlResMask[i >> 3] & (1 << (i & 7))) != 0;
+}
+
+void SV_Proto_HLBuildResourceMask(void)
+{
+	resource_t *base = SV_Proto_ResourceArray();
 	const int cap = SV_Proto_HLResourceCap();
+	int kept = 0;
 
-	for (int i = 0; i < g_psv.num_resources && n < cap; i++, r++)
+	Q_memset(s_hlResMask, 0, sizeof(s_hlResMask));
+
+	for (int i = 0; i < g_psv.num_resources && i < RESOURCE_MAX_COUNT; i++)
 	{
-		if (SV_Proto_HLCanAddressResource(r))
-			n++;
+		if (SV_Proto_HLCanAddressResource(&base[i]))
+		{
+			SV_Proto_MaskSet(i, true);
+			kept++;
+		}
 	}
 
-	return n;
+	// Over the ceiling: shed by usefulness, latest entries of a kind first.
+	static const int order[] = { t_generic, t_model, t_decal, t_eventscript, t_sound };
+
+	for (int o = 0; o < (int)ARRAYSIZE(order) && kept > cap; o++)
+	{
+		for (int i = Q_min(g_psv.num_resources, RESOURCE_MAX_COUNT) - 1; i >= 0 && kept > cap; i--)
+		{
+			if (SV_Proto_HLResourceSent(i) && base[i].type == order[o])
+			{
+				SV_Proto_MaskSet(i, false);
+				kept--;
+			}
+		}
+	}
+
+	s_hlResCount = kept;
+}
+
+int SV_Proto_HLResourceCount(void)
+{
+	SV_Proto_HLBuildResourceMask();
+	return s_hlResCount;
 }
 
 int SV_Proto_HLResourceRealIndex(int hlIndex)
 {
-	if (hlIndex < 0 || hlIndex >= SV_Proto_HLResourceCap())
+	if (hlIndex < 0)
 		return -1;
 
-	resource_t *r = SV_Proto_ResourceArray();
 	int n = 0;
-
-	for (int i = 0; i < g_psv.num_resources; i++, r++)
+	for (int i = 0; i < g_psv.num_resources; i++)
 	{
-		if (!SV_Proto_HLCanAddressResource(r))
+		if (!SV_Proto_HLResourceSent(i))
 			continue;
 
 		if (n == hlIndex)

@@ -406,12 +406,8 @@ void SV_SendConsistencyList(sizebuf_t *msg)
 	for (int i = 0; i < g_psv.num_resources; i++)
 	{
 #ifdef REHLDS_SVEN
-		if (consIsHL && !SV_Proto_HLCanAddressResource(&resources[i]))
+		if (consIsHL && !SV_Proto_HLResourceSent(i))
 			continue;
-
-		// Same positional cap the resource list itself stops at.
-		if (consIsHL && pos >= SV_Proto_HLResourceCap())
-			break;
 
 		const int i_ = pos++;
 #else
