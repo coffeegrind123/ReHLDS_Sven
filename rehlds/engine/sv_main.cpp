@@ -6339,6 +6339,11 @@ static void SV_EmitBaselines(sizebuf_t *msg)
 	MSG_WriteByte(msg, svc_spawnbaseline);
 	MSG_StartBitWriting(msg);
 
+#ifdef REHLDS_SVEN
+	const bool baseIsHL = MSG_WriteIsHL();
+	int baseWritten = 0;
+#endif
+
 	for (entnum = 0; entnum < g_psv.num_edicts; entnum++)
 	{
 		svent = &g_psv.edicts[entnum];
@@ -6349,11 +6354,25 @@ static void SV_EmitBaselines(sizebuf_t *msg)
 			// was never told about leaves it holding a null model_t, and the
 			// renderer dereferences that without checking. Nothing is written for
 			// this entity, which is the same as it simply having no baseline.
+			//
+			// Entity 0 is exempt, and that exemption is load-bearing. It is the
+			// world, whose model the client has by definition -- but the reason
+			// it may never be skipped is that it keeps this block non-empty. A
+			// stock client that reads the 0xFFFF terminator as the FIRST index
+			// leaves its "last baseline written" pointer holding the address of
+			// the entity_state_t delta registration, and then copies 340 bytes
+			// out of it twice, to +0x15C and +0x2B0, straight over its own heap.
+			// Measured in hw.dll (Half-Life 25th anniversary) with a hardware
+			// watchpoint: the write lands on the delta registry, and the client
+			// dies later in DELTA_LookupRegistration("clientdata_t") walking a
+			// list whose head node now holds copied entity state.
 			{
 				const int mi = g_psv.baselines[entnum].modelindex;
-				if (MSG_WriteIsHL() && mi && !SV_Proto_HLModelUsable(mi))
+				if (entnum != 0 && baseIsHL && mi && !SV_Proto_HLModelUsable(mi))
 					continue;
 			}
+
+			baseWritten++;
 
 			PROTO_BITS(ENTITY_NUMBER, entnum);
 #else //!REHLDS_SVEN
@@ -6373,6 +6392,18 @@ static void SV_EmitBaselines(sizebuf_t *msg)
 			DELTA_WriteDelta((byte *)&nullstate, (byte *)&(g_psv.baselines[entnum]), TRUE, pDelta, NULL);
 		}
 	}
+
+#ifdef REHLDS_SVEN
+	if (baseIsHL)
+	{
+		Con_DPrintf("%s: %d baselines to a Half-Life client\n", __func__, baseWritten);
+
+		// Unreachable while entity 0 is exempt above, but say so rather than
+		// hand a client a block that makes it corrupt its own heap.
+		if (baseWritten == 0)
+			Con_Printf("%s: WARNING: empty baseline block for a Half-Life client\n", __func__);
+	}
+#endif
 
 	MSG_WriteBits(0xFFFF, 16);
 	MSG_WriteBits(g_psv.instance_baselines->number, 6);
@@ -6447,18 +6478,28 @@ void SV_CreateBaseline(void)
 	gEntityInterface.pfnCreateInstancedBaselines();
 
 	SV_EmitBaselines(&g_psv.signon);
-#ifdef REHLDS_SVEN
-	// svc_spawnbaseline is bit-packed: the entity index is 13 bits under Sven
-	// and 11 under Half-Life, and every DELTA_WriteDelta inside it carries a
-	// bitmask whose length field differs too. There is no byte-level patch that
-	// turns one into the other, so the block is emitted twice.
-	//
-	// The 0xFFFF terminator is NOT one of the widened fields: a client reads a
-	// 16-bit word, compares it to 0xFFFF, and only then seeks back and reads
-	// the index at its own width. So it stays 16 bits in both.
-	SV_EmitBaselines(&g_sv_signon_hl);
-#endif
 }
+
+#ifdef REHLDS_SVEN
+// svc_spawnbaseline is bit-packed: the entity index is 13 bits under Sven and
+// 11 under Half-Life, and every DELTA_WriteDelta inside it carries a bitmask
+// whose length field differs too. There is no byte-level patch that turns one
+// into the other, so the block is emitted twice.
+//
+// The 0xFFFF terminator is NOT one of the widened fields: a client reads a
+// 16-bit word, compares it to 0xFFFF, and only then seeks back and reads the
+// index at its own width. So it stays 16 bits in both.
+//
+// This half is emitted separately from SV_CreateBaseline because it filters
+// entities by whether the client can resolve their model index, and that
+// answer comes from the resource list -- which SV_CreateBaseline predates.
+// Run any earlier it reads the PREVIOUS map's resources (or none at all on the
+// first map), finds nothing addressable, and skips every entity.
+static void SV_CreateBaselineHL(void)
+{
+	SV_EmitBaselines(&g_sv_signon_hl);
+}
+#endif // REHLDS_SVEN
 
 void SV_BroadcastCommand(char *fmt, ...)
 {
@@ -6780,6 +6821,11 @@ void EXT_FUNC SV_ActivateServer_internal(int runPhysics)
 #ifdef REHLDS_FIXES
 	MoveCheckedResourcesToFirstPositions();
 #endif // REHLDS_FIXES
+#ifdef REHLDS_SVEN
+	// After the list exists and after MoveCheckedResourcesToFirstPositions has
+	// finished reordering it -- the Half-Life resource mask is positional.
+	SV_CreateBaselineHL();
+#endif // REHLDS_SVEN
 	for (i = 0, cl = g_psvs.clients; i < g_psvs.maxclients; cl++, i++)
 	{
 		if (!cl->fakeclient && (cl->active || cl->connected))
