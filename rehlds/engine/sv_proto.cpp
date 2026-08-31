@@ -293,6 +293,15 @@ int SV_Proto_HLResourceCap(void)
 static byte s_hlResMask[(RESOURCE_MAX_COUNT + 7) / 8];
 static int s_hlResCount = 0;
 
+// Which model indices a Half-Life client can actually resolve. A model index is
+// only usable if the client was TOLD about it: cl.model_precache[i] is null
+// otherwise, and the renderer dereferences it without checking. Index 0 is
+// never precached by anyone, so "no model" cannot be expressed that way either
+// -- an entity whose model is missing has to be withheld, not zeroed.
+static byte s_hlModelSent[(PROTO_HL_MAX_MODELS + 7) / 8];
+static int s_hlMaskBuiltFor = -1;
+static float s_hlMaskBuiltCap = -1.0f;
+
 static inline void SV_Proto_MaskSet(int i, bool on)
 {
 	if (on)
@@ -316,6 +325,7 @@ void SV_Proto_HLBuildResourceMask(void)
 	int kept = 0;
 
 	Q_memset(s_hlResMask, 0, sizeof(s_hlResMask));
+	Q_memset(s_hlModelSent, 0, sizeof(s_hlModelSent));
 
 	for (int i = 0; i < g_psv.num_resources && i < RESOURCE_MAX_COUNT; i++)
 	{
@@ -341,7 +351,40 @@ void SV_Proto_HLBuildResourceMask(void)
 		}
 	}
 
+	// Record which model indices survived, for the entity emitters.
+	for (int i = 0; i < g_psv.num_resources && i < RESOURCE_MAX_COUNT; i++)
+	{
+		if (!SV_Proto_HLResourceSent(i))
+			continue;
+
+		if (base[i].type != t_model && base[i].type != t_world)
+			continue;
+
+		const int mi = base[i].nIndex;
+		if (mi > 0 && mi < PROTO_HL_MAX_MODELS)
+			s_hlModelSent[mi >> 3] |= (1 << (mi & 7));
+	}
+
 	s_hlResCount = kept;
+	s_hlMaskBuiltFor = g_psv.num_resources;
+	s_hlMaskBuiltCap = sv_proto_hl_max_resources.value;
+}
+
+// The entity emitters run every frame, long after the resource list was sent,
+// so make sure the mask reflects the current map before they consult it.
+static void SV_Proto_HLEnsureResourceMask(void)
+{
+	if (s_hlMaskBuiltFor != g_psv.num_resources || s_hlMaskBuiltCap != sv_proto_hl_max_resources.value)
+		SV_Proto_HLBuildResourceMask();
+}
+
+bool SV_Proto_HLModelUsable(int modelindex)
+{
+	if (modelindex <= 0 || modelindex >= PROTO_HL_MAX_MODELS)
+		return false;
+
+	SV_Proto_HLEnsureResourceMask();
+	return (s_hlModelSent[modelindex >> 3] & (1 << (modelindex & 7))) != 0;
 }
 
 int SV_Proto_HLResourceCount(void)

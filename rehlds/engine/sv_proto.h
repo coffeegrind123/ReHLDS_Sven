@@ -209,12 +209,11 @@ bool SV_Proto_HLResourceSent(int i);
 int SV_Proto_HLResourceCount(void);
 int SV_Proto_HLResourceRealIndex(int hlIndex);
 
-// A model index a Half-Life client cannot address becomes "no model": the
-// entity is invisible there rather than taking the client down.
-inline bool SV_Proto_HLCanAddressModel(int modelindex)
-{
-	return modelindex < PROTO_HL_MAX_MODELS;
-}
+// Whether a Half-Life client can resolve this model index at all: it must be
+// inside its precache array AND have actually been sent. Clamping an unusable
+// index to 0 does not work -- nothing precaches index 0, so the client is left
+// dereferencing a null model_t and faults inside hw.dll.
+bool SV_Proto_HLModelUsable(int modelindex);
 
 const char *SV_Proto_DialectName(proto_dialect_t dialect);
 
