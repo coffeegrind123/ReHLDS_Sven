@@ -840,7 +840,13 @@ qboolean SV_BuildSoundMsg(edict_t *entity, int channel, const char *sample, int 
 		MSG_WriteBits((uint32)(attenuation * 64.0f), 8);
 	MSG_WriteBits(channel, 3);
 #ifdef REHLDS_SVEN
-	PROTO_BITS(SOUND_ENTITY, ent);
+	// The client spatialises against cl_entities[ent]; an entity it cannot
+	// address has to be attributed to the world instead. The origin is written
+	// below either way, so the sound still plays in the right place.
+	if (MSG_WriteIsHL() && !SV_Proto_HLEntityUsable(ent))
+		PROTO_BITS(SOUND_ENTITY, 0);
+	else
+		PROTO_BITS(SOUND_ENTITY, ent);
 #else
 	MSG_WriteBits(ent, MAX_EDICT_BITS);
 #endif
@@ -5357,6 +5363,13 @@ void SV_WriteEntitiesToClient(client_t *client, sizebuf_t *msg)
 		for (int i = 0; i < curPack->num_entities; i++)
 		{
 			entity_state_t *es = &curPack->entities[i];
+
+			// Past the client's cl_entities[]. CL_ParsePacketEntities feeds the
+			// number straight to CL_EntityNum, which calls Host_Error rather
+			// than ignoring it, so this one drops the connection outright.
+			if (!SV_Proto_HLEntityUsable(es->number))
+				continue;
+
 			if (es->modelindex && !SV_Proto_HLModelUsable(es->modelindex))
 				continue;
 
@@ -6368,6 +6381,11 @@ static void SV_EmitBaselines(sizebuf_t *msg)
 			// list whose head node now holds copied entity state.
 			{
 				const int mi = g_psv.baselines[entnum].modelindex;
+
+				// Past cl_entities[] -- CL_EntityNum calls Host_Error on it.
+				if (baseIsHL && !SV_Proto_HLEntityUsable(entnum))
+					continue;
+
 				if (entnum != 0 && baseIsHL && mi && !SV_Proto_HLModelUsable(mi))
 					continue;
 			}
