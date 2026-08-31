@@ -120,6 +120,8 @@ enum
 #define PROTO_HL_MAX_GENERIC	512
 #define PROTO_HL_MAX_DECALS	512
 #define PROTO_HL_MAX_EVENTS	256
+#define PROTO_HL_MAX_LIGHTSTYLES	64
+#define PROTO_HL_MAX_PACKET_ENTITIES	256
 
 // ---------------------------------------------------------------------------
 // Per-client state

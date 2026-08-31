@@ -1624,7 +1624,19 @@ void SV_WriteSpawn(sizebuf_t *msg)
 			SV_FullClientUpdate(client, msg);
 	}
 
-	for (i = 0; i < ARRAYSIZE( g_psv.lightstyles ); i++)
+#ifdef REHLDS_SVEN
+	// cl_lightstyle[] is 64 entries in a stock client and 256 here, and this
+	// loop writes every one of them with its index. Sending 256 to a Half-Life
+	// client is 192 writes past the end of that array, on every join and on
+	// every map -- which is what took a stock client down the moment the
+	// gamedir gate stopped refusing it first.
+	const int nStyles = MSG_BufIsHL(msg)
+		? Q_min((int)ARRAYSIZE(g_psv.lightstyles), PROTO_HL_MAX_LIGHTSTYLES)
+		: (int)ARRAYSIZE(g_psv.lightstyles);
+#else
+	const int nStyles = (int)ARRAYSIZE(g_psv.lightstyles);
+#endif
+	for (i = 0; i < nStyles; i++)
 	{
 		MSG_WriteByte(msg, svc_lightstyle);
 		MSG_WriteByte(msg, i);
@@ -5291,6 +5303,14 @@ void SV_WriteEntitiesToClient(client_t *client, sizebuf_t *msg)
 #endif
 
 #ifdef REHLDS_SVEN
+	// A stock client's per-frame entity array is 256; this fork's is 1024.
+	if (SV_Proto_ClientIsHL(client) && curPack->num_entities > PROTO_HL_MAX_PACKET_ENTITIES)
+	{
+		Con_DPrintf("%s: trimming %d visible entities to %d for a Half-Life client\n",
+			__func__, curPack->num_entities, PROTO_HL_MAX_PACKET_ENTITIES);
+		curPack->num_entities = PROTO_HL_MAX_PACKET_ENTITIES;
+	}
+
 	// Clamp before the pack is both emitted and recorded as this client's frame,
 	// so the delta baseline the next frame is computed against agrees with what
 	// the client was actually told. See PROTO_HL_MAX_MODELS.
