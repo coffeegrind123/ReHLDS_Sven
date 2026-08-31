@@ -131,6 +131,33 @@ misparse:
 | **Unreliable payload** | Capped at 4000 bytes and at `MAX_ROUTEABLE_PACKET`, rather than Sven's 65000. |
 | **Resource / consistency indices** | 12 and 10 bits respectively, against Sven's 16. |
 
+### What a Half-Life client cannot render
+
+Past the wire there is a second wall, and it is higher. A stock client enforces
+content ceilings that Sven Co-op's own content is built past, and no amount of
+server-side work moves them -- the server would have to withhold the content,
+which is not the same as the client being able to play.
+
+Measured against a retail Sven Co-op 5.26 install (108 maps, 61 WADs, 1649
+models, 470 sprites), against the stock ceilings:
+
+| | stock limit | what Sven ships |
+|---|---|---|
+| **Surface extents** | 256 (`Mod_CalcSurfaceExtents` `Sys_Error`s above it) | **42 of 108 maps** exceed it. `bm_sts` peaks at 544 |
+| **Texture size** | 256x256 (`GL_LoadTexture: too big`) | **1321 model textures** over it, in **496 of 1649 models** -- `v_egon.mdl` is 512x512. **37 sprites**, up to 1024x1024. WADs too: `snd.wad` alone has 151 at 512x512 |
+| **Map/WAD textures** | 256x256 | only **3 of 108 maps** reference nothing larger |
+
+Combining those, **3 of 108 maps** clear everything a stock client checks, and
+one of them is a 53-face lobby. The models are worse: nearly a third of them
+cannot be uploaded by that renderer at all, so even a map that loads is missing
+most of what stands in it.
+
+So the honest position is that the dialect layer makes a stock Half-Life client
+**connect and spawn correctly**, and that is where the engine's reach ends. To
+actually play, use a client whose limits match the content -- the SevenKewp
+client, or an engine like Xash3D-FWGS that speaks protocol 48 with raised
+ceilings.
+
 The game DLL is a separate matter from the wire. The engine will frame every message
 correctly for both clients; whether a Half-Life client has the *content* (models, sounds,
 sprites) and the client-side message handlers to make sense of what a Sven mod sends it is up
