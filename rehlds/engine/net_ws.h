@@ -206,6 +206,16 @@ void NET_AdjustLag();
 qboolean NET_LagPacket(qboolean newdata, netsrc_t sock, netadr_t *from, sizebuf_t *data);
 void NET_FlushSocket(netsrc_t sock);
 qboolean NET_GetLong(unsigned char *pData, int size, int *outSize);
+#ifdef REHLDS_SVEN
+// Split-packet framing for one peer dialect. A receiver places part N at
+// `N * NET_SplitPayloadSize()` and derives that stride from the size of the
+// header IT parses, so the emitter has to take both numbers from the same
+// layout. Sven's split header is one byte longer than Half-Life's, so these
+// two answers differ by one -- and getting it wrong shifts every part after
+// the first by a byte on the receiving end.
+size_t NET_SplitHeaderSize(bool isHL);
+int NET_SplitPayloadSize(bool isHL);
+#endif // REHLDS_SVEN
 qboolean NET_QueuePacket(netsrc_t sock);
 int NET_Sleep();
 void NET_StartThread();

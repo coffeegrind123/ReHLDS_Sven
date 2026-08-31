@@ -1315,6 +1315,18 @@ void NET_FlushQueues()
 	normalqueue = NULL;
 }
 
+#ifdef REHLDS_SVEN
+size_t NET_SplitHeaderSize(bool isHL)
+{
+	return isHL ? sizeof(SPLITPACKET_HL) : sizeof(SPLITPACKET);
+}
+
+int NET_SplitPayloadSize(bool isHL)
+{
+	return (int)(MAX_ROUTEABLE_PACKET - NET_SplitHeaderSize(isHL));
+}
+#endif // REHLDS_SVEN
+
 int NET_SendLong(netsrc_t sock, SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen)
 {
 	static long gSequenceNumber = 1;
@@ -1339,7 +1351,17 @@ int NET_SendLong(netsrc_t sock, SOCKET s, const char *buf, int len, int flags, c
 
 		SPLITPACKET_HL *pPacketHL = (SPLITPACKET_HL *)packet;
 		const bool splitIsHL = (SV_Proto_DialectOfAddress(&splitAdr) == PROTO_DIALECT_HL);
-		const size_t splitHeaderSize = splitIsHL ? sizeof(SPLITPACKET_HL) : sizeof(SPLITPACKET);
+		const size_t splitHeaderSize = NET_SplitHeaderSize(splitIsHL);
+
+		// The receiver reassembles at `packetNumber * (MAX_ROUTEABLE_PACKET -
+		// sizeof(its own split header))`, so the chunk size is a property of the
+		// header layout being written, not of this build. Sven's header is one
+		// byte longer than Half-Life's; using the compile-time SPLIT_SIZE for a
+		// Half-Life client therefore lands every part after the first one byte
+		// short of where that client puts it, inserting a stale byte at 1390 and
+		// shifting the rest of the packet -- which the client parses as an
+		// illegible server message.
+		const int splitPayloadSize = NET_SplitPayloadSize(splitIsHL);
 
 		if (splitIsHL)
 		{
@@ -1349,6 +1371,7 @@ int NET_SendLong(netsrc_t sock, SOCKET s, const char *buf, int len, int flags, c
 		else
 #else
 		const size_t splitHeaderSize = sizeof(SPLITPACKET);
+		const int splitPayloadSize = (int)SPLIT_SIZE;
 #endif
 		{
 			pPacket->netID = NET_HEADER_FLAG_SPLITPACKET;
@@ -1357,11 +1380,11 @@ int NET_SendLong(netsrc_t sock, SOCKET s, const char *buf, int len, int flags, c
 
 		int packetNumber = 0;
 		int totalSent = 0;
-		int packetCount = (len + SPLIT_SIZE - 1) / SPLIT_SIZE;
+		int packetCount = (len + splitPayloadSize - 1) / splitPayloadSize;
 
 		while (len > 0)
 		{
-			int size = Q_min(int(SPLIT_SIZE), len);
+			int size = Q_min(splitPayloadSize, len);
 
 #ifdef REHLDS_SVEN
 			if (splitIsHL)
@@ -1372,7 +1395,7 @@ int NET_SendLong(netsrc_t sock, SOCKET s, const char *buf, int len, int flags, c
 			pPacket->packetID = (packetNumber << 4) + packetCount;
 #endif //REHLDS_SVEN
 
-			Q_memcpy(packet + splitHeaderSize, buf + (packetNumber * SPLIT_SIZE), size);
+			Q_memcpy(packet + splitHeaderSize, buf + (packetNumber * splitPayloadSize), size);
 
 			if (net_showpackets.value == 4.0f)
 			{
@@ -1381,12 +1404,26 @@ int NET_SendLong(netsrc_t sock, SOCKET s, const char *buf, int len, int flags, c
 
 				SockadrToNetadr((struct sockaddr *)to, &adr);
 
+#ifdef REHLDS_SVEN
+				// The layout and stride are what a mis-split shows up as, so log
+				// them next to the part number rather than the part number alone.
+				Con_DPrintf("Sending split %i of %i with %i bytes and seq %i to %s (%s, hdr %i, stride %i)\n",
+					packetNumber + 1,
+					packetCount,
+					size,
+					gSequenceNumber,
+					NET_AdrToString(adr),
+					splitIsHL ? "hl" : "sven",
+					(int)splitHeaderSize,
+					splitPayloadSize);
+#else // !REHLDS_SVEN
 				Con_DPrintf("Sending split %i of %i with %i bytes and seq %i to %s\n",
 					packetNumber + 1,
 					packetCount,
 					size,
 					gSequenceNumber,
 					NET_AdrToString(adr));
+#endif // REHLDS_SVEN
 			}
 
 			int ret = CRehldsPlatformHolder::get()->sendto(s, packet, size + splitHeaderSize, flags, to, tolen);
