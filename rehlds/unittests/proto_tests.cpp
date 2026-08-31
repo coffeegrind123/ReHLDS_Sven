@@ -208,4 +208,78 @@ TEST(BufferStampIsStickyAcrossClear, Proto, 1000)
 	CHECK("Stamping back to Sven must clear the flag", !MSG_BufIsHL(buf));
 }
 
+// ---------------------------------------------------------------------------
+// Split-packet framing
+//
+// NET_SendLong breaks a >1400 byte packet into parts; the receiver puts part N
+// at `N * (MAX_ROUTEABLE_PACKET - sizeof(its own split header))`. Sven widened
+// that header from 1 to 2 bytes of packetID, so the two dialects disagree about
+// the stride by exactly one byte -- and the emitter has to use the recipient's
+// number, not this build's. Getting it wrong is silent: part 0 is byte-exact,
+// so the stream reads correctly for 1390 bytes and only then desyncs.
+// ---------------------------------------------------------------------------
+
+static void Proto_SplitRoundTrip(bool isHL, int len)
+{
+	// What the emitter frames with.
+	const size_t hdr = NET_SplitHeaderSize(isHL);
+	const int stride = NET_SplitPayloadSize(isHL);
+	const int parts = (len + stride - 1) / stride;
+
+	// What the recipient reassembles with, derived from the header IT parses --
+	// deliberately computed here rather than taken from the emitter, because
+	// the whole point is that the two have to agree.
+	const size_t peerHdr = isHL ? sizeof(SPLITPACKET_HL) : sizeof(SPLITPACKET);
+	const int peerStride = (int)(MAX_ROUTEABLE_PACKET - peerHdr);
+
+	static byte src[MAX_UDP_PACKET];
+	static byte dst[MAX_UDP_PACKET];
+	for (int i = 0; i < len; i++)
+		src[i] = (byte)(i * 31 + 7);			// anything but a constant
+
+	// The receive buffer is long-lived on a real client, so a gap left by a
+	// mismatched stride shows up as stale bytes, not as an obvious hole.
+	Q_memset(dst, 0xCD, sizeof(dst));
+
+	int total = 0;
+	int remaining = len;
+	for (int n = 0; remaining > 0; n++)
+	{
+		const int size = Q_min(stride, remaining);
+
+		CHECK("a split part plus its header must still be routeable",
+			(int)hdr + size <= MAX_ROUTEABLE_PACKET);
+
+		// Emitter reads at its stride; recipient writes at its own.
+		Q_memcpy(&dst[peerStride * n], &src[stride * n], size);
+
+		if (n == parts - 1)
+			total = size + peerStride * (parts - 1);	// NET_GetLong's totalSize
+
+		remaining -= size;
+	}
+
+	UINT32_EQUALS("reassembled size must match what was sent", (uint32)len, (uint32)total);
+	MEM_EQUAL("reassembled payload must be byte-exact", src, dst, len);
+}
+
+TEST(SplitPacketStrideFollowsPeerDialect, Proto, 1000)
+{
+	// The two layouts, pinned: one byte apart, and that byte is the stride.
+	UINT32_EQUALS("Half-Life split header is 9 bytes", 9u, (uint32)NET_SplitHeaderSize(true));
+	UINT32_EQUALS("Sven split header is 10 bytes", 10u, (uint32)NET_SplitHeaderSize(false));
+	UINT32_EQUALS("Half-Life split stride", 1391u, (uint32)NET_SplitPayloadSize(true));
+	UINT32_EQUALS("Sven split stride", 1390u, (uint32)NET_SplitPayloadSize(false));
+
+	// Sizes that straddle both strides, so an off-by-one in either the stride
+	// or the part count shows up.
+	const int lengths[] = { 1401, 1500, 2780, 2781, 2782, 3990, 4008 };
+
+	for (int i = 0; i < (int)ARRAYSIZE(lengths); i++)
+	{
+		Proto_SplitRoundTrip(true, lengths[i]);
+		Proto_SplitRoundTrip(false, lengths[i]);
+	}
+}
+
 #endif // REHLDS_SVEN

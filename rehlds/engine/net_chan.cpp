@@ -1098,7 +1098,12 @@ void Netchan_CreateFragments_(qboolean server, netchan_t *chan, sizebuf_t *msg)
 	{
 		unsigned char compressed[65536];
 		char hdr[4] = "BZ2";
-		unsigned int compressedSize = msg->cursize - sizeof(hdr);	// we should fit in same data buffer minus 4 bytes for a header
+		// We should fit in the same data buffer minus 4 bytes for a header -- but
+		// bzlib writes up to *destLen bytes and knows nothing of the real buffer,
+		// and SV_SendRes_f composes into a 256KB sizebuf under REHLDS_SVEN, so the
+		// bound has to be the smaller of the two. Asking for more than `compressed`
+		// holds is a stack overflow, not a failed compression.
+		unsigned int compressedSize = Q_min((unsigned int)(msg->cursize - sizeof(hdr)), (unsigned int)sizeof(compressed));
 		if (!BZ2_bzBuffToBuffCompress((char *)compressed, &compressedSize, (char *)msg->data, msg->cursize, 9, 0, 30))
 		{
 			Con_DPrintf("Compressing split packet (%d -> %d bytes)\n", msg->cursize, compressedSize);

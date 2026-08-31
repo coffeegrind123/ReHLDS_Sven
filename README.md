@@ -65,6 +65,21 @@ Nothing dialect-dependent is emitted before that point: everything up to and inc
 
 `status` gains a `proto` column showing what each connected player is being served.
 
+### What diverges below the messages
+
+Three things under the message layer differ, and all three key off that same per-client
+answer. They are listed here because none of them is visible in a message dump — a mistake in
+any of them corrupts the stream some way *into* a packet, so the client reports the failure at
+a message that was written correctly.
+
+| | |
+|---|---|
+| **Packet munging** | Half-Life `COM_Munge2`s everything from byte 8 on; Sven sends it plain. |
+| **Netchan fragment headers** | Half-Life writes `frag_startpos` and `frag_length` as shorts; Sven writes longs. |
+| **Split-packet framing** | Anything over `MAX_ROUTEABLE_PACKET` is cut into parts behind a `SPLITPACKET` header: 9 bytes for Half-Life, 10 for Sven, which widened `packetID` to a short. The receiver places part *N* at `N * (MAX_ROUTEABLE_PACKET - the header size **it** parses)`, so the payload stride differs as well — 1391 against 1390. The emitter has to take both numbers from the recipient's layout; taking the stride from this build's is a one-byte shift of every part after the first. |
+
+`net_showpackets 4` names the layout, header size and stride on each part it sends.
+
 ### The gamedir gate
 
 A stock Half-Life client checks the server's gamedir **client-side** and disconnects itself
