@@ -390,7 +390,7 @@ void SV_SendConsistencyList(sizebuf_t *msg)
 			continue;
 
 		// Same positional cap the resource list itself stops at.
-		if (consIsHL && pos >= PROTO_HL_MAX_RESOURCE_LIST)
+		if (consIsHL && pos >= SV_Proto_HLResourceCap())
 			break;
 
 		const int i_ = pos++;

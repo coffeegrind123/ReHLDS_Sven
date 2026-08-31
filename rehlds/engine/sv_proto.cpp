@@ -38,6 +38,12 @@ cvar_t sv_proto_log      = { "sv_proto_log",      "0",    0,            0.0f, nu
 // real one. See SV_SendServerinfo_internal for why this exists.
 cvar_t sv_proto_hl_gamedir = { "sv_proto_hl_gamedir", "", FCVAR_SERVER, 0.0f, nullptr };
 
+// How many resources a Half-Life client is told about at most. It cannot store
+// more than PROTO_HL_MAX_RESOURCE_LIST of them whatever this says, so that is
+// both the default and the ceiling; lower it to trade content for a client that
+// gets further, or to bisect which resource a client dies on.
+cvar_t sv_proto_hl_max_resources = { "sv_proto_hl_max_resources", "1280", FCVAR_SERVER, 0.0f, nullptr };
+
 // Per-slot dialect. Deliberately NOT a client_t member: client_t is walked by
 // Metamod plugins that were compiled against the current layout, and growing
 // it would shift g_psvs.clients' stride under them.
@@ -95,6 +101,7 @@ void SV_Proto_Init(void)
 	Cvar_RegisterVariable(&sv_proto_fallback);
 	Cvar_RegisterVariable(&sv_proto_log);
 	Cvar_RegisterVariable(&sv_proto_hl_gamedir);
+	Cvar_RegisterVariable(&sv_proto_hl_max_resources);
 
 	// Also done per map in SV_SpawnServer; do it here so the twins are never
 	// a null-data sizebuf, whatever order a caller reaches them in.
@@ -255,12 +262,24 @@ bool SV_Proto_HLCanAddressResource(const struct resource_s *r)
 	}
 }
 
+int SV_Proto_HLResourceCap(void)
+{
+	int cap = (int)sv_proto_hl_max_resources.value;
+
+	if (cap <= 0 || cap > PROTO_HL_MAX_RESOURCE_LIST)
+		cap = PROTO_HL_MAX_RESOURCE_LIST;
+
+	return cap;
+}
+
 int SV_Proto_HLResourceCount(void)
 {
 	resource_t *r = SV_Proto_ResourceArray();
 	int n = 0;
 
-	for (int i = 0; i < g_psv.num_resources && n < PROTO_HL_MAX_RESOURCE_LIST; i++, r++)
+	const int cap = SV_Proto_HLResourceCap();
+
+	for (int i = 0; i < g_psv.num_resources && n < cap; i++, r++)
 	{
 		if (SV_Proto_HLCanAddressResource(r))
 			n++;
@@ -271,7 +290,7 @@ int SV_Proto_HLResourceCount(void)
 
 int SV_Proto_HLResourceRealIndex(int hlIndex)
 {
-	if (hlIndex < 0 || hlIndex >= PROTO_HL_MAX_RESOURCE_LIST)
+	if (hlIndex < 0 || hlIndex >= SV_Proto_HLResourceCap())
 		return -1;
 
 	resource_t *r = SV_Proto_ResourceArray();
