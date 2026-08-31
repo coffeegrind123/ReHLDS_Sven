@@ -144,6 +144,7 @@ extern cvar_t sv_proto_dialect;		// "auto" | "sven" | "hl"
 extern cvar_t sv_proto_fallback;	// dialect to assume when detection is inconclusive
 extern cvar_t sv_proto_log;		// 0 off, 1 verdicts, 2 full hex dumps
 extern cvar_t sv_proto_hl_gamedir;	// gamedir reported to Half-Life clients
+extern cvar_t sv_proto_hl_max_resources;	// cap on the resource list sent to them
 
 void SV_Proto_Init(void);
 
@@ -197,6 +198,7 @@ void SV_Proto_LogConnect(const netadr_t *adr, const char *protinfo, const char *
 // back for anything that reads an index off the wire.
 struct resource_s;
 bool SV_Proto_HLCanAddressResource(const struct resource_s *r);
+int SV_Proto_HLResourceCap(void);
 int SV_Proto_HLResourceCount(void);
 int SV_Proto_HLResourceRealIndex(int hlIndex);
 
