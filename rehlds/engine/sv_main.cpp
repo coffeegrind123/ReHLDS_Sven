@@ -1335,10 +1335,25 @@ void EXT_FUNC SV_SendResources_internal(sizebuf_t *msg)
 		MSG_WriteString(msg, sv_downloadurl.string);
 	}
 
+#ifdef REHLDS_SVEN
+	// A Half-Life client cannot address a precache index past its own array
+	// bounds, so it is not enough to encode the list at the narrower width --
+	// the entries it could not hold have to come out of the list entirely.
+	// See PROTO_HL_MAX_MODELS for what that costs and why.
+	const bool resIsHL = MSG_BufIsHL(msg);
+	const int resCount = resIsHL ? SV_Proto_HLResourceCount() : g_psv.num_resources;
+
+	if (resIsHL && resCount != g_psv.num_resources)
+	{
+		Con_DPrintf("%s: withholding %d of %d resources from a Half-Life client "
+			"(past its precache arrays)\n", __func__, g_psv.num_resources - resCount, g_psv.num_resources);
+	}
+#endif
+
 	MSG_WriteByte(msg, svc_resourcelist);
 	MSG_StartBitWriting(msg);
 #ifdef REHLDS_SVEN
-	PROTO_BITS(RESOURCE_INDEX, g_psv.num_resources);
+	PROTO_BITS(RESOURCE_INDEX, resCount);
 #else
 	MSG_WriteBits(g_psv.num_resources, RESOURCE_INDEX_BITS);
 #endif
@@ -1350,6 +1365,11 @@ void EXT_FUNC SV_SendResources_internal(sizebuf_t *msg)
 #endif
 	for (int i = 0; i < g_psv.num_resources; i++, r++)
 	{
+#ifdef REHLDS_SVEN
+		if (resIsHL && !SV_Proto_HLCanAddressResource(r))
+			continue;
+#endif
+
 		MSG_WriteBits(r->type, 4);
 		MSG_WriteBitString(r->szFileName);
 #ifndef REHLDS_SVEN
@@ -5270,6 +5290,20 @@ void SV_WriteEntitiesToClient(client_t *client, sizebuf_t *msg)
 	}
 #endif
 
+#ifdef REHLDS_SVEN
+	// Clamp before the pack is both emitted and recorded as this client's frame,
+	// so the delta baseline the next frame is computed against agrees with what
+	// the client was actually told. See PROTO_HL_MAX_MODELS.
+	if (SV_Proto_ClientIsHL(client))
+	{
+		for (int i = 0; i < curPack->num_entities; i++)
+		{
+			if (!SV_Proto_HLCanAddressModel(curPack->entities[i].modelindex))
+				curPack->entities[i].modelindex = 0;
+		}
+	}
+#endif // REHLDS_SVEN
+
 	//for REHLDS_FIXES: Entities are already in the frame's storage, no need to copy them
 #ifndef REHLDS_OPT_PEDANTIC
 	SV_AllocPacketEntities(frame, fullpack.num_entities);
@@ -6249,7 +6283,24 @@ static void SV_EmitBaselines(sizebuf_t *msg)
 					pDelta = g_pentitydelta;
 			}
 
+#ifdef REHLDS_SVEN
+			// Same ceiling as the resource list, reached from the other side: a
+			// model index the client has no array slot for is sent as "no model"
+			// rather than as a number it will index cl.model_precache[] with.
+			entity_state_t hlbase;
+			const entity_state_t *pBase = &g_psv.baselines[entnum];
+
+			if (MSG_WriteIsHL() && !SV_Proto_HLCanAddressModel(pBase->modelindex))
+			{
+				hlbase = *pBase;
+				hlbase.modelindex = 0;
+				pBase = &hlbase;
+			}
+
+			DELTA_WriteDelta((byte *)&nullstate, (byte *)pBase, TRUE, pDelta, NULL);
+#else //!REHLDS_SVEN
 			DELTA_WriteDelta((byte *)&nullstate, (byte *)&(g_psv.baselines[entnum]), TRUE, pDelta, NULL);
+#endif //REHLDS_SVEN
 		}
 	}
 

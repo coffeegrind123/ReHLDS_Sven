@@ -101,6 +101,27 @@ enum
 #define PROTO_HL_MAX_DELTA_FIELDS	56
 
 // ---------------------------------------------------------------------------
+// A stock Half-Life client's precache ARRAY SIZES -- taken from upstream
+// qlimits.h, before this fork widened the index fields from 9 bits to 13 and
+// events from 256 to 1024.
+//
+// These are not wire widths. The client indexes cl.model_precache[],
+// cl.sound_precache[] and friends with the number the server hands it, so a
+// value past the end is a read or write off the end of a fixed array inside
+// the client -- it crashes on join rather than reporting missing content.
+// The encoding being correct does not help: the resource list decodes
+// perfectly and then the client walks off its own array.
+//
+// Measured on svencoop/bm_sts: 1626 resources, of which 604 models (max index
+// 604) and 749 generics (max index 748) -- 330 past the ceiling.
+// ---------------------------------------------------------------------------
+#define PROTO_HL_MAX_MODELS	512
+#define PROTO_HL_MAX_SOUNDS	512
+#define PROTO_HL_MAX_GENERIC	512
+#define PROTO_HL_MAX_DECALS	512
+#define PROTO_HL_MAX_EVENTS	256
+
+// ---------------------------------------------------------------------------
 // Per-client state
 // ---------------------------------------------------------------------------
 
@@ -159,6 +180,22 @@ proto_dialect_t SV_Proto_ProbeIncoming(client_t *cl, const byte *data, int len);
 // sv_proto_log so the detector can be checked against observed bytes rather
 // than inference.
 void SV_Proto_LogConnect(const netadr_t *adr, const char *protinfo, const char *userinfo);
+
+// Resources a Half-Life client can actually address (see PROTO_HL_MAX_MODELS).
+// The resource list sent to such a client is filtered by this, so its indices
+// are positions in the FILTERED list -- SV_Proto_HLResourceRealIndex maps one
+// back for anything that reads an index off the wire.
+struct resource_s;
+bool SV_Proto_HLCanAddressResource(const struct resource_s *r);
+int SV_Proto_HLResourceCount(void);
+int SV_Proto_HLResourceRealIndex(int hlIndex);
+
+// A model index a Half-Life client cannot address becomes "no model": the
+// entity is invisible there rather than taking the client down.
+inline bool SV_Proto_HLCanAddressModel(int modelindex)
+{
+	return modelindex < PROTO_HL_MAX_MODELS;
+}
 
 const char *SV_Proto_DialectName(proto_dialect_t dialect);
 

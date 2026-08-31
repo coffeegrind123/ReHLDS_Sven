@@ -216,6 +216,81 @@ proto_dialect_t SV_Proto_DialectOfAddress(netadr_t *adr)
 	return PROTO_DIALECT_SVEN;
 }
 
+// ---------------------------------------------------------------------------
+// Resources a Half-Life client can address
+//
+// Sven's qlimits give 8192 models / 8192 sounds / 8192 generics / 512 decals /
+// 1024 events; a stock client has 512 / 512 / 512 / 512 / 256 and indexes those
+// arrays with whatever index the resource list gives it. So the list has to be
+// filtered for such a client, not merely encoded at the narrower width.
+//
+// The filter is a pure function of the resource array, so nothing has to be
+// remembered per client: the same walk recovers the mapping in either
+// direction.
+// ---------------------------------------------------------------------------
+
+static resource_t *SV_Proto_ResourceArray(void)
+{
+#ifdef REHLDS_FIXES
+	return g_rehlds_sv.resources;
+#else
+	return g_psv.resourcelist;
+#endif
+}
+
+bool SV_Proto_HLCanAddressResource(const struct resource_s *r)
+{
+	if (!r)
+		return false;
+
+	switch (r->type)
+	{
+	case t_model:
+	case t_world:		return r->nIndex < PROTO_HL_MAX_MODELS;
+	case t_sound:		return r->nIndex < PROTO_HL_MAX_SOUNDS;
+	case t_generic:		return r->nIndex < PROTO_HL_MAX_GENERIC;
+	case t_decal:		return r->nIndex < PROTO_HL_MAX_DECALS;
+	case t_eventscript:	return r->nIndex < PROTO_HL_MAX_EVENTS;
+	default:		return true;	// t_skin carries no precache index
+	}
+}
+
+int SV_Proto_HLResourceCount(void)
+{
+	resource_t *r = SV_Proto_ResourceArray();
+	int n = 0;
+
+	for (int i = 0; i < g_psv.num_resources; i++, r++)
+	{
+		if (SV_Proto_HLCanAddressResource(r))
+			n++;
+	}
+
+	return n;
+}
+
+int SV_Proto_HLResourceRealIndex(int hlIndex)
+{
+	if (hlIndex < 0)
+		return -1;
+
+	resource_t *r = SV_Proto_ResourceArray();
+	int n = 0;
+
+	for (int i = 0; i < g_psv.num_resources; i++, r++)
+	{
+		if (!SV_Proto_HLCanAddressResource(r))
+			continue;
+
+		if (n == hlIndex)
+			return i;
+
+		n++;
+	}
+
+	return -1;
+}
+
 void SV_Proto_StampBuffer(sizebuf_t *sb, proto_dialect_t dialect)
 {
 	if (!sb)
