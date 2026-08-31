@@ -2090,6 +2090,11 @@ void EXT_FUNC PF_lightstyle_I(int style, const char *val)
 		client_t* cl = &g_psvs.clients[i];
 		if ((cl->active || cl->spawned) && !cl->fakeclient)
 		{
+#ifdef REHLDS_SVEN
+			// Same 64-entry ceiling as the spawn-time block in SV_WriteSpawn.
+			if (style >= PROTO_HL_MAX_LIGHTSTYLES && SV_Proto_ClientIsHL(cl))
+				continue;
+#endif
 			MSG_WriteChar(&cl->netchan.message, svc_lightstyle);
 			MSG_WriteChar(&cl->netchan.message, style);
 			MSG_WriteString(&cl->netchan.message, val);
