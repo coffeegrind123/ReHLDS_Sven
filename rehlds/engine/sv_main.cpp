@@ -1345,8 +1345,9 @@ void EXT_FUNC SV_SendResources_internal(sizebuf_t *msg)
 
 	if (resIsHL && resCount != g_psv.num_resources)
 	{
-		Con_DPrintf("%s: withholding %d of %d resources from a Half-Life client "
-			"(past its precache arrays)\n", __func__, g_psv.num_resources - resCount, g_psv.num_resources);
+		Con_DPrintf("%s: sending %d of %d resources to a Half-Life client "
+			"(rest are past its precache arrays or its %d-entry resource list)\n",
+			__func__, resCount, g_psv.num_resources, PROTO_HL_MAX_RESOURCE_LIST);
 	}
 #endif
 
@@ -1363,11 +1364,22 @@ void EXT_FUNC SV_SendResources_internal(sizebuf_t *msg)
 #else // REHLDS_FIXES
 	resource_t *r = g_psv.resourcelist;
 #endif
+#ifdef REHLDS_SVEN
+	int resWritten = 0;
+#endif
 	for (int i = 0; i < g_psv.num_resources; i++, r++)
 	{
 #ifdef REHLDS_SVEN
-		if (resIsHL && !SV_Proto_HLCanAddressResource(r))
-			continue;
+		if (resIsHL)
+		{
+			if (!SV_Proto_HLCanAddressResource(r))
+				continue;
+
+			// Positional cap as well as the per-index one: the count above stops
+			// at PROTO_HL_MAX_RESOURCE_LIST, so the body has to stop there too.
+			if (resWritten++ >= resCount)
+				break;
+		}
 #endif
 
 		MSG_WriteBits(r->type, 4);
