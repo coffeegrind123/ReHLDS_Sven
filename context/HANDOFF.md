@@ -3,137 +3,162 @@
 **Goal.** A retail Half-Life client connects to this ReHLDS_Sven server, spawns, and plays,
 alongside Sven Co-op clients on the same server.
 
-**Status.** The client gets through the entire signon, precache and map load. It still
-crashes. The current fault is understood down to the faulting instruction but not yet to a
-cause. Everything below is measured, not assumed; where something is a guess it says so.
+**Status: reached.** On 2026-09-01 a stock `hl.exe` (Valve's `valve/cl_dlls/client.dll`,
+Half-Life's own `liblist.gam` and `delta.lst`, no Sven Co-op mod files in the game path)
+connected to this server, precached, loaded `abandoned`, spawned and stayed in:
+
+```
+#      name userid uniqueid frag time ping loss proto adr
+# 1     ":P" 1 STEAM_6:1:1774456220   0 01:53   15    0    hl 172.17.0.1:38890
+1 users
+```
+
+`proto hl`, active, 0% loss, world rendered, HUD showing 100 health. Screenshots at
+`~/hlshot.png` and `~/hlshot2.png`.
 
 ---
 
-## The single most important fact
+## Read this before trusting the previous handoff
 
-A test run on 2026-08-31 loaded the same map **with no server involved**:
+The client used for every measurement before this session **was not a stock Half-Life
+client**, and nobody had checked. Two separate contaminations were live in the game path:
 
+| path | what was there |
+|---|---|
+| `valve_addon/cl_dlls/client.dll` | SevenKewp's client (1556480 bytes, 2026-04-18) |
+| `valve_downloads/` | a complete **Sven Co-op 5.26 mod install** — `liblist.gam`, `dlls/server.dll`, `cl_dlls/client.dll`, `delta.lst`, `valve.rc`, `config.cfg`, `resource/`, `scripts/`, every WAD |
+
+GoldSrc's search order is `valve_addon` > `valve_downloads` > `valve`, so **both shadowed
+the retail files**. Proven, not assumed: the client printed `This is not a SevenKewp
+server` (that string exists only in `valve_addon`'s client.dll) *and* `Sven Co-op 5.26`
+(the game name and version out of `valve_downloads/liblist.gam`).
+
+Consequences for the old handoff:
+
+- The "single most important fact" — `hl.exe +map abandoned` loads with no server and does
+  not crash — was measuring **a Sven Co-op listen server**, because `valve_downloads`
+  supplied `liblist.gam` (`gamedll "dlls/server.dll"`) and the Sven client DLL. It said
+  nothing about a Half-Life client. (The control has since been re-run properly on a clean
+  client: it does load and render `abandoned` standalone. The conclusion held; the evidence
+  behind it did not.)
+- The crash at `hw.dll+0x247d03` (`r_worldmodel` NULL during lightmap building) was
+  produced by a third-party client.dll and **has not reappeared** on a stock client. Do not
+  start from it.
+
+The offending files were moved to
+`C:\Program Files (x86)\Steam\steamapps\common\Half-Life\_stock_test_disabled\`, one
+directory, nothing deleted. **Move them back to restore the SevenKewp/Sven Co-op client**;
+leave them aside to keep testing a retail client.
+
+## The tool that changed everything: cdb is installed
+
+`C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe` (and x64). Reach it through
+`~/claude-host-bridge/hostexec`. This replaced days of static RE with direct answers.
+
+```powershell
+# second-chance only -- first-chance AVs in VGUI are normal noise and will stop you
+# at the wrong place if you leave them enabled
+$c = "sxd av;sxd eh;g;.echo ===XCRASH===;.lastevent;r;u @eip-18 @eip+8;kb 30;q"
+Start-Process $cdb -WorkingDirectory $hl -ArgumentList `
+  "-o -logo C:\temp\cdb.log -c `"$c`" `"$hl\hl.exe`" -console -condebug -window -game valve -novid +connect 127.0.0.1:27016"
 ```
-hl.exe -console -condebug +map abandoned   ->  STILL RUNNING (no crash)
-```
 
-So the client can load `abandoned` and all its content on its own. **The remaining fault is
-something the server sends.** An earlier conclusion in this session — "the wall is Sven's
-content, the engine work is done" — was wrong, and the README section written on that basis
-(`7f389ff`, "What a Half-Life client cannot render") overstates the case. The content
-ceilings in it are real and correctly measured, but they are not what is crashing this
-client on this map.
+- `-cf <file>` runs a command script — use it instead of `-c` as soon as you need nested
+  quotes. Write it `-Encoding ascii`.
+- **Hardware watchpoints work and are the sharpest instrument here.** `ba w4 <addr>` caught
+  the heap corruption at the exact `rep movsd` that did it. To arm one after engine init,
+  `bp` a known init-time address first, then set the `ba` at that break.
+- `bp hw+<RVA> "r esi;gc"` logs a value on every hit without stopping — that is how the
+  client's baseline entity-number sequence was recovered.
+- **Page heap is NOT available**: the bridge is not elevated, and
+  `HKLM\...\Image File Execution Options\hl.exe` is denied. Watchpoints instead.
+- `gflags.exe /p` **hangs** the bridge (it opens a GUI). Do not run it. Kill it with
+  `Get-Process gflags | Stop-Process -Force` if you already did.
+- hw.dll has no symbols; work in RVAs. Image base 0x10000000, so
+  `RVA = runtime_addr - <hw base from ModLoad>`, and the local dump is at
+  `objdump -d --target=pei-i386 -M intel ~/hw.dll` (`0x10000000 + RVA`).
 
-**Confirm this before anything else**, because the whole plan depends on it: re-run that
-standalone map load, and separately confirm whether a connect now succeeds or crashes.
-
-## Where the crash is
-
-From the Windows Application event log (via `~/claude-host-bridge/hostexec`), five
-consecutive identical entries:
-
-```
-Faulting module hw.dll, exception 0xc0000005, fault offset 0x00247d03
-```
-
-`hw.dll` copied to `~/hw.dll`, disassembled with
-`objdump -d --target=pei-i386 -M intel`:
-
-```
-10247cfe:  a1 50 cc 3f 11        mov  eax, ds:0x113fcc50     <- a GLOBAL, not an array elem
-10247d03:  83 b8 7c 01 00 00 00  cmp  DWORD PTR [eax+0x17c], 0
-```
-
-`0x113fcc50` is written in exactly one place in the whole binary:
-
-```
-101a85f5:  mov eax, ds:0x113f6414      ; cl.worldmodel
-101a85fa:  mov ds:0x113fcc50, eax      ; r_worldmodel
-101a85ff:  test eax,eax
-101a8601:  je  ...                     ; null-checked HERE, not at the fault
-```
-
-So **`r_worldmodel` is NULL when a lightmap path runs**. Either that assignment never ran,
-or it ran with `cl.worldmodel` still null. The enclosing function of the fault is
-`0x10247b50`, called from four sites (`102471bd`, `1024b964`, `1024bed0`, `1024c06b`) — the
-surrounding code tests a `0xFF` style sentinel and zeroes a 16-byte-stride accumulator, i.e.
-lightmap building.
-
-Ruled out: the client **has** `abandoned.bsp` in `valve_downloads`, and it is byte-identical
-to the server's copy (`md5 233b6978973c2436b4b7ac8e5500fc60`). Not a missing or mismatched map.
-
-**Next step:** identify the two early-return conditions at the top of `0x101a8580`
-(`cmp ds:0x1140e87c,0` / `cmp ds:0x1140da6c,2` + `cmp ds:0x11408de0,5`) and work out which
-one the server can influence. Also worth checking what the four callers of `0x10247b50` are
-reached from during a signon.
-
-## Fixed this session (all verified on the wire, not just compiled)
+## Fixed this session
 
 | commit | bug |
 |---|---|
-| `fcbeeb4` | split packets framed with Sven's 1390 stride for clients that reassemble at 1391 |
-| `2961fea` | resource indices past the client's 512-entry precache arrays |
-| `110adf7` | 256 lightstyles written into a 64-entry array — 192 writes past the end, every join |
-| `f1bf95e` | 1296 resources into a 1280-entry `cl.resourcelist[]` |
-| `7abf0bb` | a netchan packet emitted **before the dialect probe ran**, therefore unmunged; at seq 1 the padded keepalive unmunges to `00 01 19 5a ...` and that `0x00` is `svc_bad` |
-| `bc2c410` | resource trim was positional, so it always sacrificed decals and kept generics |
-| `fb16961` | unusable model indices clamped to 0 — but nothing precaches index 0, so `cl.model_precache[0]` is NULL |
-| `f747647` | same, for `PF_makestatic_I` and `PF_StaticDecal`, which write model indices straight into the signon |
+| `32860ad` | event scripts a Half-Life client can never obtain (`events/*.sc`) were named in its resource list; the engine treats a missing one as fatal — `Cannot continue without script events/clcheck.sc, disconnecting.` Sven's **dedicated-server** package ships no `.sc` files at all, so they were unobtainable by construction. Withheld; `SV_EmitEvents` got the matching index guard. |
+| `f3eda01` | `SV_CreateBaseline` runs **before** `SV_CreateResourceList`, so `fb16961`'s model-usability filter consulted the previous map's resources, skipped every entity, and sent an **empty** `svc_spawnbaseline`. A stock client that reads 0xFFFF as the first index leaves its "last baseline" pointer holding the address of the `entity_state_t` delta registration and then memcpys 340 bytes out of it **twice** — straight over its own delta registry. Emit the HL twin after the list exists; never skip entity 0. |
+| `879fd43` | entity numbers past the client's `cl_entities[]`. It is `-num_edicts` (default 1200) `+ 15 * (maxclients - 1)`; 1305 here. `CL_EntityNum` calls **Host_Error**, not a warning. Baselines and packet entities filter on it; sounds fall back to the world. |
+| `bf3a3f8` | (diagnostics) `sv_proto_log 2` now prints the exact baseline sequence a client should read. |
+| `b718cad` | **the desync.** The HL delta trim unmarks fields past 56 so the mask fits 3 bits — and got the *length* wrong. `DELTAJit_SetSendFlagBits` returns `markedFieldsMaskSize`, cached when the fields were MARKED; `DELTAJit_UnsetFieldByIndex` only clears the bit. So on any entity marking `entity_state_t::gaitsequence` (field 57 — the one field the trim costs) the count still said 8, and **8 written in three bits is 0**. The client read no mask, then 8 bytes of mask and every field after it at the wrong bit offset. |
 
-`b854586` is not a fix: it restores `REHLDS_SVEN` to `CMakeLists.txt`, which `fb16961`
-dropped by accident (see Hazards).
+The last one is the one to remember: it was **silent on both sides**. The client parsed 178
+of 503 baselines in perfect ascending order, then read `769, 101, 4, 1164, 1968` and died
+on `CL_EntityNum: 1968 is an invalid number, cl.max_edicts is 1305`. Every number after the
+break was garbage, and the fatal one pointed at a completely different (real, but not
+active) bug. Do not diagnose from the number in the error message.
+
+Earlier commits (`fcbeeb4` split framing, `2961fea` resource indices, `110adf7` lightstyles,
+`f1bf95e` `cl.resourcelist[1280]`, `7abf0bb` unmunged pre-probe packet, `bc2c410` shed by
+use not position, `fb16961`/`f747647` unusable model indices) are described in the git log.
 
 ## Current state
 
-- Server: docker container `svencoop-server`, engine from CI of `f747647`, map `abandoned`,
-  `sv_proto_hl_gamedir "valve"`, `sv_proto_log 2`, `sv_proto_hl_max_resources 1280`.
-  Reachable from the container at `172.17.0.2:27015`, from Windows at `127.0.0.1:27016`.
-- `server.cfg` in the volume persists `sv_proto_hl_gamedir` and `sv_proto_log`. Anything set
-  only over rcon is lost on restart — that already cost one wasted round.
-- Working tree clean at `f747647`. Local gates all pass.
+- Server: docker `svencoop-server`, engine from CI of `b718cad`, map `abandoned`,
+  `172.17.0.2:27015` from the container, `127.0.0.1:27016` from Windows.
+- `server.cfg` in the volume persists `sv_proto_hl_gamedir "valve"` and `sv_proto_log "2"`.
+  Runtime-only cvars are lost on restart — that has cost a round more than once.
+- Working tree clean at `b718cad`. Local build passes.
+- The Half-Life client is (or was) left running and connected.
 
 ## Tools
 
-- **`tools/hlprobe.py`** (gitignored, local only). A Half-Life-dialect client: munges like
-  one, drives the full signon, prints netchan header, fragment headers, split framing and the
-  svc stream. `--dump DIR` keeps every reassembled payload; `--dlfile`, `--seconds`, `--name`.
-  It reaches "has entered the game" against the current server. **It does not render**, so it
-  cannot reproduce this crash — but it proves the wire.
-- **`~/claude-host-bridge/hostexec`** runs PowerShell on the Windows host. This is how the
-  event log, `hw.dll` and the client's file listing were obtained. Use it early; three rounds
-  were spent binary-searching a silent crash that one event-log query explained.
+- **cdb** — see above. Use it first.
+- **`~/claude-host-bridge/hostexec`** — PowerShell on the Windows host. `-t <ms>` for a
+  longer timeout, `-j` to detach. Anything over ~60s must be detached or it kills the
+  listener's single thread.
+- **`tools/hlprobe.py`** (gitignored) — a Half-Life-dialect client that drives the full
+  signon and dumps the svc stream. It does not render, so it cannot see rendering faults,
+  but it proves the wire. Not needed once cdb is available.
 - `~/hw.dll` — the client engine, for disassembly.
-- `~/hl-safe-content/` — 1019 files, textures resampled to within 256x256 and `w*h % 4 == 0`.
-  Built by a local `tools/hlshrink.py`. Validated by full re-parse: 0 violations across 1649
-  models, 471 sprites, 9813 WAD textures. Probably **not** needed given the standalone map
-  load succeeded, but it is correct and harmless.
-- rcon password `cs16test`; a small helper script lives in the session scratchpad and is
-  trivially rewritten (challenge, then `rcon <challenge> "<pw>" <cmd>`).
+- rcon: `python3 <scratchpad>/rcon.py <cmd>`, password `cs16test`, host `172.17.0.2:27015`.
+  Trivially rewritten (challenge, then `rcon <challenge> "<pw>" <cmd>`).
+- `~/hl-safe-content/` — 1019 files, textures resampled within 256x256. Not needed; the
+  stock client renders `abandoned` as shipped.
 
 ## Hazards learned the hard way
 
 1. **Never deploy a locally built engine.** It needs a newer `libstdc++` than the runtime
-   image (`GLIBCXX_3.4.29` not found → `Unable to load engine, image is corrupt`) and the
-   server enters a restart loop. Always take the binary from CI. Verify before deploying:
-   `strings engine_i486.so | grep -c sv_proto_hl_max_resources` must be non-zero.
-2. **`git add -A` after a killed gate run committed the removal of `REHLDS_SVEN`.** CI then
-   built stock ReHLDS, and the server died with
-   `DELTA_BuildFromLinks: Too many fields in delta description 57 (MAX 56)`. The gate script
-   now builds the stock config in a throwaway `git worktree` and asserts the define survives.
-3. **A restart reverts the map to `bm_sts`** (container CMD) — which this client *cannot*
-   load (surface extents 544 > 256). Always `changelevel abandoned` after a restart.
-4. **Don't put a blind auto-kill on a process on the user's desktop.** A 75-second
-   `Stop-Process -Name hl -Force` killed their client mid-session.
-5. Error strings from the client have been worth more than every inference made from the
-   server side. `crashes on precaching resources` found `MAX_RESOURCE_LIST`;
-   `Used decal #68 without a name` found the positional trim. Ask for the text, or read the
-   event log directly.
+   image (`GLIBCXX_3.4.29` → `Unable to load engine, image is corrupt`) and the server
+   enters a restart loop. Take the binary from CI:
+   `gh run download <id> -R coffeegrind123/ReHLDS_Sven -n linux32`, then
+   `bin/linux32/engine_i486.so`. Verify before deploying — `grep -ac sv_proto_hl_max_resources`
+   must be non-zero. (`strings` is not installed in the container; `grep -a` works.)
+2. **`git add -A` after a killed gate run once committed the removal of `REHLDS_SVEN`**, and
+   CI silently built stock ReHLDS. Add named paths.
+3. **A restart reverts the map to `bm_sts`** (container CMD), which this client cannot load
+   (surface extents 544 > 256). Always `changelevel abandoned` after a restart, and give it
+   ~30s — rcon does not answer while the map loads.
+4. **The source files are CRLF.** Editing them with a Python `open(...).read()/write()`
+   rewrites every line ending and produces a whole-file diff. Use `newline=''` and put
+   `\r\n` in the patterns. (`sv_proto.h` lines 125-132 are LF-only; leave them alone.)
+5. **Don't put a blind auto-kill on a process on the user's desktop.** A 75-second
+   `Stop-Process -Name hl -Force` killed their client mid-session. Kill by the PID you
+   launched.
+6. Error strings from the client have been worth more than every inference made from the
+   server side — but **only the first one**. Once a stream desyncs, everything the client
+   reports is downstream garbage.
 
 ## What is genuinely unresolved
 
-- Why `r_worldmodel` is NULL during lightmap building, given the map loads standalone.
-- Whether temp entities are a remaining source of unusable model/sprite indices. They are
-  composed by the game DLL through `MESSAGE_BEGIN`, where the engine cannot tell which shorts
-  are indices, so `f747647` explicitly does not cover them.
-- `mp_consistency` is 0 on this server, so the consistency path added in `2961fea` /
-  `bc2c410` (filtered positions, index mapping) has **never been exercised**.
+- **`-num_edicts` is assumed, not negotiated.** `879fd43` assumes the documented default of
+  1200. A player who launches with a *lower* `-num_edicts` will still overflow; there is no
+  way to ask. `sv_proto_hl_max_edicts` exists to set it by hand.
+- **Temp entities.** They are composed by the game DLL through `MESSAGE_BEGIN`, where the
+  engine cannot tell which shorts are model indices or entity numbers, so none of the
+  filtering covers them. This is the most likely source of the next fault.
+- **`args.entindex` on events** is not filtered against the client's edict ceiling. Not
+  observed to fail; not proven safe either.
+- **`mp_consistency` is 0** on this server, so the consistency path added in `2961fea` /
+  `bc2c410` has still never been exercised.
+- **Gameplay beyond spawning is untested.** The client is standing in the map with the MOTD
+  up. Nobody has fired a weapon, triggered a Sven entity, or changed level with it
+  connected.
+- **A Sven client and a Half-Life client have not been on the server at the same time**,
+  which is the actual goal.
