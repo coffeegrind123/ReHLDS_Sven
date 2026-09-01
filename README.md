@@ -24,167 +24,43 @@ Along with reverse engineering, a lot of defects and (potential) bugs were found
 | | |
 |---|---|
 | **Sven Co-op protocol** | Protocol 48 as Svengine speaks it: widened user messages, long-encoded coords and fragment headers, raised `qlimits`, no packet munging, Sven's consistency/delta framing |
-| **Mixed Sven + Half-Life clients** | The dialect is chosen **per client, at runtime**, so retail Sven Co-op 5.26 players and stock Half-Life players (vanilla, or the [SevenKewp](https://github.com/wootguy/SevenKewp) client) can play on the same server — see [Mixed-client servers](#mixed-client-servers) |
+| **Mixed Sven + Half-Life clients** | The dialect is chosen **per client, at runtime**, so retail Sven Co-op 5.26 players and stock Half-Life players (vanilla, or the [SevenKewp](https://github.com/wootguy/SevenKewp) client) can play on the same server — see [Mixed Sven and Half-Life clients](#mixed-sven-and-half-life-clients) |
 | **Ready-to-run plugin stack** | Releases bundle [metamod-fallguys](https://github.com/hzqst/metamod-fallguys) + [ReUnion](https://github.com/rehlds/reunion) in a `gamedir/` tree, configured to accept non-Steam clients |
 | **Automatic ReUnion salt** | The engine generates a per-server `SteamIdHashSalt` on first run and preserves it across upgrades |
 | **Sven-specific cvars** | `sv_rehlds_sven_block_game_bans`, `sv_rehlds_sven_tolerate_steam_deny`, `sv_rehlds_maxusrcmdprocessticks`, `sv_rehlds_force_allow_lagcompensation`, `sv_log_daily` |
 | **Retail `server.so` fixes** | Recovers from the unterminated `MESSAGE_BEGIN` that killed servers ~30x/day, fixes a `DELTA_ParseDelta` stack overflow, honours `-nobreakpad` |
 | **Steam deny diagnostics** | Every Steam client deny is logged with its reason code, and the four Steam-*connectivity* reasons no longer drop legitimate players |
 
-## Mixed-client servers
+
+## Mixed Sven and Half-Life clients
 
 Sven Co-op and Half-Life both announce **protocol 48**, but Svengine widened a set of wire
-fields and dropped packet munging. Historically this fork picked one of the two encodings at
-compile time, so a server spoke Sven *or* Half-Life and never both.
-
-It is now chosen **per client**, at runtime. One server, running the retail Sven Co-op
-`server.so`, can serve a retail Sven 5.26 player and a stock Half-Life player at the same
-time.
-
-### How a client's dialect is decided
-
-By its **first netchan packet**, not by anything it claims about itself.
-
-The netchan header (bytes 0-7) is plain in both dialects; everything from byte 8 on is
-`COM_Munge2`'d for Half-Life and plain for Sven. The client speaks first over the netchan —
-its opening message is `clc_stringcmd "new"` — so the server decodes that payload both ways
-and keeps whichever parses as a valid `clc` stream. A userinfo key would be a claim the
-client makes about itself, and can be absent, stale or spoofed; the munge either round-trips
-or it does not.
-
-Nothing dialect-dependent is emitted before that point: everything up to and including the
-`connect` reply is connectionless, and `svc_serverinfo` is composed in response to the very
-`new` that resolves the dialect.
+fields and dropped packet munging. This fork picks the encoding **per client, at runtime**,
+from the client's first netchan packet, so one server running the retail Sven Co-op
+`server.so` can serve a retail Sven Co-op 5.26 player and a stock Half-Life player at the same
+time. Clients with raised ceilings — the [SevenKewp](https://github.com/wootguy/SevenKewp)
+client, or Xash3D-FWGS — are served the Half-Life dialect too.
 
 | cvar | default | |
 |---|---|---|
 | `sv_proto_dialect` | `auto` | `auto` detects; `sven` or `hl` forces every client, for testing |
 | `sv_proto_fallback` | `sven` | what to assume if four probes in a row are inconclusive |
-| `sv_proto_log` | `0` | `1` logs each verdict and every `connect`'s protinfo/userinfo; `2` adds hex dumps of both decodings |
-| `sv_proto_hl_gamedir` | *(empty)* | gamedir reported to Half-Life clients only — see [The gamedir gate](#the-gamedir-gate) |
+| `sv_proto_log` | `0` | `1` logs each verdict and every `connect`'s protinfo/userinfo; `2` adds hex dumps |
+| `sv_proto_hl_gamedir` | *(empty)* | gamedir reported to Half-Life clients only; set it to the gamedir those players run, e.g. `valve` |
+| `sv_proto_hl_max_edicts` | `0` | entity-number ceiling for Half-Life clients; `0` derives it from `maxplayers` |
+| `sv_proto_hl_max_resources` | `1280` | resource-list cap for Half-Life clients, which is also the protocol maximum |
 
 `status` gains a `proto` column showing what each connected player is being served.
 
-### What diverges below the messages
+A stock Half-Life client connects, spawns and plays. It gives up what its protocol cannot
+represent (entity indices past 2047, 56 delta fields, 63 weapon slots, clamped coordinates),
+and it cannot render every Sven Co-op map — 43 of a 108-map retail pack exceed its lightmap or
+surface-extent ceilings. `tools/hlmapcheck.py` reports which.
 
-Three things under the message layer differ, and all three key off that same per-client
-answer. They are listed here because none of them is visible in a message dump — a mistake in
-any of them corrupts the stream some way *into* a packet, so the client reports the failure at
-a message that was written correctly.
-
-| | |
-|---|---|
-| **Packet munging** | Half-Life `COM_Munge2`s everything from byte 8 on; Sven sends it plain. |
-| **Netchan fragment headers** | Half-Life writes `frag_startpos` and `frag_length` as shorts; Sven writes longs. |
-| **Split-packet framing** | Anything over `MAX_ROUTEABLE_PACKET` is cut into parts behind a `SPLITPACKET` header: 9 bytes for Half-Life, 10 for Sven, which widened `packetID` to a short. The receiver places part *N* at `N * (MAX_ROUTEABLE_PACKET - the header size **it** parses)`, so the payload stride differs as well — 1391 against 1390. The emitter has to take both numbers from the recipient's layout; taking the stride from this build's is a one-byte shift of every part after the first. |
-
-`net_showpackets 4` names the layout, header size and stride on each part it sends.
-
-### The gamedir gate
-
-A stock Half-Life client checks the server's gamedir **client-side** and disconnects itself
-before it ever spawns:
-
-```
-Sven Co-op 5.26
-Server Engine: 5.0.18 (build 10493)
-Server Number: 1
-
-Server is running game svencoop.  Restart in that game to connect.
-```
-
-That is not a protocol failure — reaching it means the wire is correct.
-[rehlds/rehlds#975](https://github.com/rehlds/rehlds/issues/975) settled the general case: the
-only fix is for the server to report a different gamedir, and it was judged to need the client
-to declare its game through `setinfo`, "*but this does not happen*". That is what upstream's
-`_gd` userinfo key is for; it still works here and still takes precedence.
-
-The dialect probe removes that dependency for this case. The server has already worked out
-from the wire that a client is stock GoldSrc rather than Svengine, with no cooperation from
-it, so it can spoof the gamedir for exactly those clients. It still cannot know *which* mod a
-stock client runs — the probe reads the dialect, not the gamedir — so name it once:
-
-```
-sv_proto_hl_gamedir "valve"      // or whatever gamedir your Half-Life-side players run
-```
-
-Empty (the default) reports the real gamedir and changes nothing.
-
-⚠ **Spoofing the gamedir does not conjure content.** The client still needs the map and the
-models, and `mp_consistency` will fight you across two games with different content — the same
-caveat rehlds#975 raises. This gets a Half-Life-side client *past the gate*; having something
-to play once through is a mod and gamedir question, not an engine one.
-
-### What a Half-Life client gives up
-
-These are ceilings of the stock protocol, not bugs — a Half-Life client cannot represent
-them at all, so the engine clamps or truncates rather than sending something it will
-misparse:
-
-| | |
-|---|---|
-| **Coordinates** | Byte-aligned coords are shorts (±4096 units) and bit-packed ones have a 12-bit integer part. Values past that are **clamped**, not wrapped — a clamped position is wrong but bounded; a wrapped one lands on the far side of the map. |
-| **Entity indices** | 11 bits, so entities past 2047 are not addressable. Sven's are 13. |
-| **Delta fields** | The bitmask length is 3 bits, so at most 7 bytes, so at most **56 fields**. Measured against retail 5.26's `svencoop/delta.lst` this costs exactly one: `entity_state_t::gaitsequence` (#57). Every other struct fits — `clientdata_t` 34, `entity_state_player_t` 51, `weapon_data_t` 22, `custom_entity_state_t` 20, `usercmd_t` 15, `event_t` 14. Half-Life clients lose leg animation on non-player entities and nothing else. |
-| **Weapon slots** | 64, not 256 — and the engine sends at most **63**, because a stock client's reader exits on its loop bound and would leave the list terminator unread at exactly 64. |
-| **User messages** | Registered as variable-length, since narrowing coordinates changes the payload length after the size was advertised at signon. One that still exceeds 255 bytes cannot be framed and is dropped with a `Con_DPrintf`. |
-| **Unreliable payload** | Capped at 4000 bytes and at `MAX_ROUTEABLE_PACKET`, rather than Sven's 65000. |
-| **Resource / consistency indices** | 12 and 10 bits respectively, against Sven's 16. |
-
-### What a Half-Life client cannot render
-
-Past the wire there is a second wall, and it is higher. A stock client enforces
-content ceilings that Sven Co-op's own content is built past, and no amount of
-server-side work moves them -- the server would have to withhold the content,
-which is not the same as the client being able to play.
-
-Measured against a retail Sven Co-op 5.26 install (108 maps, 61 WADs, 1649
-models, 470 sprites), against the stock ceilings:
-
-| | stock limit | what Sven ships |
-|---|---|---|
-| **Surface extents** | 256 (`Mod_CalcSurfaceExtents` `Sys_Error`s above it) | **42 of 108 maps** exceed it. `bm_sts` peaks at 544 |
-| **Texture size** | 256x256 (`GL_LoadTexture: too big`) | **1321 model textures** over it, in **496 of 1649 models** -- `v_egon.mdl` is 512x512. **37 sprites**, up to 1024x1024. WADs too: `snd.wad` alone has 151 at 512x512 |
-| **Map/WAD textures** | 256x256 | only **3 of 108 maps** reference nothing larger |
-
-Combining those, **3 of 108 maps** clear everything a stock client checks, and
-one of them is a 53-face lobby. The models are worse: nearly a third of them
-cannot be uploaded by that renderer at all, so even a map that loads is missing
-most of what stands in it.
-
-So the honest position is that the dialect layer makes a stock Half-Life client
-**connect and spawn correctly**, and that is where the engine's reach ends. To
-actually play, use a client whose limits match the content -- the SevenKewp
-client, or an engine like Xash3D-FWGS that speaks protocol 48 with raised
-ceilings.
-
-The game DLL is a separate matter from the wire. The engine will frame every message
-correctly for both clients; whether a Half-Life client has the *content* (models, sounds,
-sprites) and the client-side message handlers to make sense of what a Sven mod sends it is up
-to the mod and the gamedir, not the engine.
-
-### How it is built
-
-The whole thing keys off one bit on `sizebuf_t::flags` (`SIZEBUF_PROTO_HL`). A buffer with
-no stamp is native Sven, so **every path that predates this layer behaves exactly as it did**
-— only buffers destined for a Half-Life client diverge. The `MSG_*` primitives read the stamp
-off the buffer they are writing to, or off the bit writer's current buffer, so a call site
-says `PROTO_BITS(ENTITY_NUMBER, num)` and never has to know who the recipient is.
-
-Every divergence is declared once, in `PROTO_BITFIELD_LIST` in
-[`rehlds/engine/sv_proto.h`](rehlds/engine/sv_proto.h), so a field's two widths cannot drift
-apart at the call sites. ⚠ Note that the event `packet_index` is **narrower** under Sven (10
-bits vs 11) while everything else is wider — folding it in with the entity indices by reflex
-is a mistake that has already cost one debugging session.
-
-Four buffers are composed once and replayed to every client — the signon block, the broadcast
-datagram, the multicast staging buffer and the spectator datagram — so those are built
-**twice**, once per dialect, and the consumer picks by recipient. Transcoding on delivery was
-rejected: it would need a parser for every `svc` message and would rot the first time one
-changed. `g_psv.reliable_datagram` is deliberately not twinned; its `MSG_ALL` user messages
-are already fanned out per client and what remains is dialect-neutral.
-
-`rehlds/unittests/proto_tests.cpp` round-trips every field in the table through both stamps.
+📖 **[docs/mixed-clients.md](docs/mixed-clients.md)** — how the dialect is detected, what
+diverges below the message layer, the gamedir gate, the full list of protocol ceilings, the
+renderer ceilings with the addresses they were read from, and how the implementation is
+structured.
 
 ## Goals of the project
 <ul>
@@ -202,11 +78,14 @@ ReHLDS is licensed under the [MIT License](./LICENSE).
 > Originally released under [GPLv3](https://www.gnu.org/licenses/gpl-3.0.html), ReHLDS transitioned to the MIT License in July 2025 with the agreement of the core contributors.  
 > See [LICENSE-TRANSITION.md](./LICENSE-TRANSITION.md) for details.
 
+
 ## How do I use it?
 ReHLDS_Sven is a drop-in replacement for the engine in an official SvenDS install. Install
-SvenDS first, then overwrite the files below.
+SvenDS first, then overwrite `engine_i486.so`/`swds.dll`, `hlds_linux`/`hlds.exe` and
+`libsteam_api.so`/`steam_api.dll` from the release, and copy the bundled `gamedir/` overlay
+into your mod directory.
 
-> [!CAUTION]  
+> [!CAUTION]
 > This project works only with Sven Co-op 5.26.
 
 #### Downloading SvenDS via steamcmd
@@ -215,54 +94,10 @@ SvenDS first, then overwrite the files below.
 app_update 276060 validate
 ```
 
-### Installing over a SvenDS install
+📖 **[docs/deploying.md](docs/deploying.md)** — the full file list and why each one matters,
+`steamclient.so` placement, upgrading an existing install, what is in a release, the bundled
+metamod + ReUnion overlay and the automatic ReUnion salt.
 
-From `bin/linux32/` in the release (`bin/win32/` on Windows), copy into the SvenDS root:
-
-| file | why |
-|---|---|
-| `engine_i486.so` / `swds.dll` | the fork itself |
-| `hlds_linux` / `hlds.exe` | dedicated launcher, matched to the engine |
-| `libsteam_api.so` / `steam_api.dll` | **required**, and easy to miss — SvenDS ships its own copy and it has to be overwritten too |
-
-Then copy the `gamedir/` overlay into your mod directory — see
-[The bundled `gamedir/` overlay](#the-bundled-gamedir-overlay).
-
-> [!IMPORTANT]
-> `steamclient.so` is **not** in our releases and is not part of this project. It comes from
-> steamcmd — the Steamworks SDK redist depot, alongside SvenDS itself — and the engine expects
-> to find it at `~/.steam/sdk32/steamclient.so`, *not* in the server directory. A symlink is
-> the usual way:
->
-> ```sh
-> mkdir -p ~/.steam/sdk32
-> ln -sf /path/to/svends/steamclient.so ~/.steam/sdk32/steamclient.so
-> ```
-
-The release also ships `filesystem_stdio.so`, `hltv`, `core.so`, `demoplayer.so` and
-`proxy.so`. These are ReHLDS builds of stock components and are not required: SvenDS's own
-copies work, and the reference deployment for this fork runs retail's `filesystem_stdio.so`
-against our engine. Replace them only if you have a reason to.
-
-### Upgrading an existing install
-
-Overwrite the same three files and restart. Two things not to do:
-
-- **Do not delete `<gamedir>/.reunion_salt`.** A new salt changes every generated
-  `STEAM_x:y:z`, which invalidates every ban and stored per-player record. See
-  [the salt section](#the-reunion-salt-is-handled-for-you).
-- **Do not re-copy `gamedir/` unless the pinned plugin versions changed.** It would overwrite
-  a `reunion.cfg` you have edited. The pinned versions are in the release notes and in
-  [Bundled plugin versions](#bundled-plugin-versions).
-
-To confirm what is actually running, check the engine's own build string:
-
-```sh
-strings -a engine_i486.so | grep -E '^(ReHLDS version|Build from)'
-```
-
-A `+m` suffix on the version (`3.15.0.898-dev+m`) means that binary was built from a modified
-working tree rather than from the commit it names — a local build, not a release one.
 
 ## Downloads
 * [Release builds](https://github.com/coffeegrind123/ReHLDS_Sven/releases)
@@ -273,71 +108,6 @@ ReHLDS_Sven binaries require `SSE`, `SSE2` and `SSE3` instruction sets to run an
 <b>Warning!</b> ReHLDS_Sven is not binary compatible with original svends since it's compiled with compilers other than ones used for original svends.
 This means that plugins that do binary code analysis (Orpheu for example) probably will not work with ReHLDS_Sven.
 
-### What is in a release
-
-`rehlds-sven-bin-<version>.zip`:
-
-| path | what |
-|---|---|
-| `bin/linux32/`, `bin/win32/` | engine, dedicated launcher, `libsteam_api.so` / `steam_api.dll`, plus HLTV and filesystem binaries |
-| `hlsdk/` | headers for building plugins against this engine |
-| `gamedir/` | drop-in overlay for your mod directory — see below |
-
-`rehlds-sven-dbg-<version>.7z` holds the matching debug symbols.
-
-> [!TIP]
-> Linux release binaries are built in `debian:11-slim`, so they require only `GLIBC_2.7`
-> (`engine_i486.so`) and `GLIBC_2.1` (`hlds_linux`) and will run on anything newer.
-
-### The bundled `gamedir/` overlay
-
-Copy its contents into your mod directory (e.g. `svencoop/`). It is the plugin stack a
-non-Steam server needs, already wired up:
-
-| path | what |
-|---|---|
-| `addons/metamod/dlls/metamod.so`, `metamod.dll` | [metamod-fallguys](https://github.com/hzqst/metamod-fallguys) `1.21p38` — note the `dlls/` subdirectory |
-| `addons/metamod/config.ini` | points metamod at the real game library (key: `gamedll`) |
-| `addons/metamod/plugins.ini` | plugin list, ReUnion first |
-| `addons/reunion/reunion_mm_i386.so`, `reunion_mm.dll` | [ReUnion](https://github.com/rehlds/reunion) `0.2.0.25` |
-| `reunion.cfg` | ReUnion config, **non-Steam clients accepted** |
-| `rotate-reunion-salt.sh` | forces a new `SteamIdHashSalt` (see below) |
-
-> [!WARNING]
-> **The metamod binary is at `addons/metamod/dlls/metamod.so`**, not `addons/metamod/metamod_i386.so`
-> as it was under Metamod-R (changed 2026-08-23). This overlay does **not** ship `liblist.gam`,
-> so whatever writes it on your side must point at the new path — the change does not propagate
-> on its own, and getting it wrong yields `Failure to load game DLL` with no mention of the path.
->
-> Two more differences worth knowing before you debug a healthy server:
-> `meta version` reports `Metamod-P (mm-p)` / `1.21p38` (a `1.3.x` means an old overlay), and
-> **this metamod prints nothing on a successful plugin load** — there is no
-> `Read plugin config for: Reunion`, so a startup-log grep for `reunion` is empty even when it
-> is running. `meta list` showing `[ 1] Reunion  RUN` is the only proof.
-
-> [!IMPORTANT]
-> ReUnion ships `cid_NoSteam47 = 5` and `cid_NoSteam48 = 5` by default, and `5` means
-> **drop the client** — the opposite of why ReUnion gets deployed. The bundled config sets
-> both to `3` (accept, assign a generated `STEAM_x:y:z`). Everything else is ReUnion's own
-> shipped config for the pinned version.
-
-#### The ReUnion salt is handled for you
-
-`reunion.cfg` ships with `SteamIdHashSalt = GENERATE_ON_FIRST_RUN`, and the engine replaces
-it with a value from the OS CSPRNG the first time the server starts — a salt baked into a
-public release would be the same for everyone who downloaded it, and so no salt at all.
-
-The generated value is also written to `<gamedir>/.reunion_salt` (mode `0600`).
-
-> [!WARNING]
-> **Keep `.reunion_salt`.** It is what lets a newer release be unpacked over an existing
-> install without minting a *new* salt — and a new salt changes every generated
-> `STEAM_x:y:z`, which invalidates every ban and every stored per-player record.
-
-A salt you set by hand is never touched, and `-noreunionsalt` disables the behaviour entirely.
-An empty salt is not a safe default: with `AuthVersion = 3` it makes ReUnion fail to initialise
-almost silently — Metamod still reports the plugin as configured and the server boots and plays
-normally, and only `meta list` reveals it never loaded.
 
 ## Configuring
 <details>
@@ -405,6 +175,7 @@ normally, and only `meta list` reveals it never loaded.
 </ul>
 </details>
 
+
 ## Commands
 <ul>
 <li>rescount // Prints the total count of precached resources in the server console
@@ -413,6 +184,7 @@ normally, and only `meta list` reveals it never loaded.
 <li>rcon_deluser &lt;ipaddress&gt; {removeAll} // Remove an IP address or CIDR range from RCON user list</li>
 <li>rcon_users // List all IP addresses and CIDR ranges in RCON user list</li>
 </ul>
+
 
 ## Build instructions
 ### Checking requirements
@@ -481,79 +253,12 @@ Select the preferred C/C++ Compiler installation
 </ul>
 </details>
 
+
 ## Maintaining this fork
 
-<details>
-<summary>Click to expand</summary>
+📖 **[docs/maintaining.md](docs/maintaining.md)** — versioning against upstream, rebasing onto
+a newer ReHLDS, release tagging, and the pinned plugin versions.
 
-### Versioning
-
-The engine reports the **upstream ReHLDS version this fork is built on**, not a
-fork-inflated one. ReHLDS derives the build number from `git rev-list --count`, so
-the commits this fork adds would otherwise inflate it past build numbers upstream
-has not reached yet.
-
-`rehlds/version/upstream_base` records the upstream commit currently rebased onto;
-`appversion.sh` / `appversion.bat` count from there. Both fall back to counting from
-`HEAD` if the file is missing or the SHA does not resolve.
-
-### Rebasing onto a newer upstream
-
-1. Replay this fork's commits onto the new `rehlds/ReHLDS` master.
-2. Update `rehlds/version/upstream_base` to the new upstream commit **in the same
-   commit that performs the rebase**, or the reported version will be wrong.
-3. Confirm: `bash rehlds/version/appversion.sh .` should print the upstream version.
-
-### Releases
-
-Tags are `<upstream-version>-sven<n>`, e.g. `3.15.0.898-sven1`. The upstream version
-comes first so the base is obvious and releases sort correctly; `-sven<n>` increments
-for further releases on the same upstream base and resets after a rebase.
-
-### Bundled plugin versions
-
-metamod-fallguys and ReUnion are **pinned** in `.github/workflows/build.yml` (`MMFG_REF` at
-the workflow level, `REUNION_VERSION` in the bundling step) rather than tracking "latest", so
-a release is reproducible and only ships versions this stack has actually been run against.
-Bump them deliberately.
-
-`MMFG_REF` is one ref for **both** halves of metamod, and that is load-bearing. The Linux
-`.so` is **built from source** in the `linux` job; the Windows `.dll` comes from that ref's
-release asset. Pinning them separately would ship a `gamedir/` whose halves were built from
-different source, and nothing downstream would notice.
-
-⚠ The Linux binary cannot be downloaded, and upstream's README says otherwise. It claims the
-makefile forces glibc 2.24 so the shipped `.so` is portable — true of the *make* path, false
-of what ships, because metamod-fallguys' own CI ends on its **cmake** script and
-`-DLINK_AGAINST_OLDER_GLIBC=TRUE` is a flag no `CMakeLists.txt` in that tree reads. Measured
-on release `v20260730a`: **`GLIBC_2.38`**, against deployment targets that supply `GLIBC_2.31`.
-So it is compiled in the `linux` job — the only bullseye environment here; `publish` is a bare
-`ubuntu-24.04` runner where building would reproduce the bug exactly — and its glibc floor is
-asserted before it is uploaded.
-
-⚠ That assertion is **separate from `glibc_test.sh`**, on a deliberately different threshold.
-The engine's script hardcodes `GLIBC 2.11`, which is upstream ReHLDS's portability target for
-ancient distros; metamod-fallguys cannot meet it (its own release needs 2.38, and even the
-glibc-forcing path its README describes targets 2.24). The number that matters for this fork
-is the documented runtime, bullseye = **2.31**. Do not reconcile the two by lowering
-`glibc_test.sh` — that weakens the *engine's* guarantee to accommodate a plugin.
-
-The packaging step derives `reunion.cfg` from ReUnion's *own* shipped config for the pinned
-version and changes only the authid policy, so it does not go stale against a bump. It then
-guards its own output — both plugin binaries per platform, `cid_NoSteam47/48 == 3`, and the
-salt sentinel matching the engine's `REUNION_SALT_SENTINEL` — and fails the build rather than
-publishing a subtly broken archive.
-
-Publishing a GitHub release triggers the build, and the `publish` job attaches
-`rehlds-sven-bin-<version>.zip` and `rehlds-sven-dbg-<version>.7z`.
-
-> [!NOTE]
-> GitHub disables automatic workflow triggers on newly created forks. If a release or
-> push does not start a run, open the **Actions** tab once and confirm the prompt to
-> enable workflows. Until then a build can be started manually against the tag with
-> `gh workflow run "C/C++ CI" --ref <tag>`, which still satisfies the publish job.
-
-</details>
 
 ## How can I help the project?
 Just install it on your game server and report problems you faced.
