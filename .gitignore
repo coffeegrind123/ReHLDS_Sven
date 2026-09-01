@@ -23,5 +23,4 @@ build-stock/
 
 rehlds/version/appversion.h
 
-# local scratch tooling, not part of the engine
-/tools/
+tools/__pycache__/
