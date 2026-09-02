@@ -261,6 +261,9 @@ cvar_t sv_hl_beacon_gamedir = { "sv_hl_beacon_gamedir", "valve",         0, 0.0f
 cvar_t sv_hl_beacon_port    = { "sv_hl_beacon_port",    "27016",         0, 0.0f, NULL };
 cvar_t sv_hl_beacon_version = { "sv_hl_beacon_version", "1.1.2.2/Stdio", 0, 0.0f, NULL };
 cvar_t sv_hl_beacon_desc    = { "sv_hl_beacon_desc",    "Half-Life",     0, 0.0f, NULL };
+// The beacon's own Steam CM port. MUST differ from the primary's (26900, or -sport):
+// two game-server users sharing one local binding cannot both log on.
+cvar_t sv_hl_beacon_sport   = { "sv_hl_beacon_sport",   "26901",         0, 0.0f, NULL };
 #endif
 
 cvar_t sv_downloadurl = { "sv_downloadurl", "", FCVAR_PROTECTED, 0.0f, NULL };
@@ -9142,6 +9145,7 @@ void SV_Init(void)
 	Cvar_RegisterVariable(&sv_hl_beacon_port);
 	Cvar_RegisterVariable(&sv_hl_beacon_version);
 	Cvar_RegisterVariable(&sv_hl_beacon_desc);
+	Cvar_RegisterVariable(&sv_hl_beacon_sport);
 #endif
 	Cvar_RegisterVariable(&sv_allow_dlfile);
 #ifdef REHLDS_FIXES
