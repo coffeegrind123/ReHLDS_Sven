@@ -264,6 +264,12 @@ cvar_t sv_hl_beacon_desc    = { "sv_hl_beacon_desc",    "Half-Life",     0, 0.0f
 // The beacon's own Steam CM port. MUST differ from the primary's (26900, or -sport):
 // two game-server users sharing one local binding cannot both log on.
 cvar_t sv_hl_beacon_sport   = { "sv_hl_beacon_sport",   "26901",         0, 0.0f, NULL };
+// 0: steamclient owns the query socket, and Steam advertises sv_hl_beacon_port as the
+//    query address -- which is what a client in the Internet list actually asks.
+// 1: MASTERSERVERUPDATERPORT_USEGAMESOCKETSHARE and we answer A2S ourselves. Steam then
+//    advertises the GAME port for queries, so clients ask 27015 and get the Sven
+//    identity back -- measured, and the reason the Half-Life listing was invisible.
+cvar_t sv_hl_beacon_ownquery = { "sv_hl_beacon_ownquery", "0",           0, 0.0f, NULL };
 #endif
 
 cvar_t sv_downloadurl = { "sv_downloadurl", "", FCVAR_PROTECTED, 0.0f, NULL };
@@ -9146,6 +9152,7 @@ void SV_Init(void)
 	Cvar_RegisterVariable(&sv_hl_beacon_version);
 	Cvar_RegisterVariable(&sv_hl_beacon_desc);
 	Cvar_RegisterVariable(&sv_hl_beacon_sport);
+	Cvar_RegisterVariable(&sv_hl_beacon_ownquery);
 #endif
 	Cvar_RegisterVariable(&sv_allow_dlfile);
 #ifdef REHLDS_FIXES

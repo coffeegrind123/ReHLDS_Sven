@@ -386,6 +386,7 @@ extern cvar_t sv_hl_beacon_port;
 extern cvar_t sv_hl_beacon_version;
 extern cvar_t sv_hl_beacon_desc;
 extern cvar_t sv_hl_beacon_sport;
+extern cvar_t sv_hl_beacon_ownquery;
 #endif
 extern cvar_t sv_tags;
 #ifdef REHLDS_FIXES
