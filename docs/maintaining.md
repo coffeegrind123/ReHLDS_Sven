@@ -26,10 +26,29 @@ for further releases on the same upstream base and resets after a rebase.
 
 ## Bundled plugin versions
 
-metamod-fallguys and ReUnion are **pinned** in `.github/workflows/build.yml` (`MMFG_REF` at
-the workflow level, `REUNION_VERSION` in the bundling step) rather than tracking "latest", so
-a release is reproducible and only ships versions this stack has actually been run against.
+metamod-fallguys and ReUnion are **pinned** in `.github/workflows/build.yml` (`MMFG_REF`, and
+`REUNION_REPO`/`REUNION_REF`, all at the workflow level) rather than tracking "latest", so a
+release is reproducible and only ships versions this stack has actually been run against.
 Bump them deliberately.
+
+**ReUnion is ours, and BOTH halves are built from source** -- Linux in the `linux` job beside
+metamod, Windows from `msvc/Reunion.sln` in the `windows` job. It is not merely that
+upstream's binary is inconvenient here: it is wrong for this game. ReUnion answers `A2S_INFO`
+itself (a ReHLDS `PreprocessPacket` hook that consumes the packet, so neither the engine nor
+steamclient ever replies) and wrote the appid into the 16-bit ID field only. Sven Co-op is
+appid 225840, which truncates to 29232, so every retail client that pinged the server read a
+foreign appid and dropped it -- while the Steam backend listed it the whole time. Measured
+2026-09-02 against four retail servers: they send query protocol 17, ID 0, EDF 0xB1 with the
+64-bit GameID; stock ReUnion sent protocol 48, ID 29232, EDF 0x80.
+
+Each ReUnion step greps the product for `sv_version`, which only the patched
+`getAppVersion()` reads. A stock binary would otherwise look completely healthy and quietly
+reinstate the bug -- the server boots, ReUnion runs, non-Steam clients still join, and only
+the Steam browser omits it.
+
+> [!NOTE]
+> `REUNION_REF` is currently a **branch**, not a tag. Pin it to a tag once the fork cuts one,
+> or a release is not reproducible.
 
 `MMFG_REF` is one ref for **both** halves of metamod, and that is load-bearing. The Linux
 `.so` is **built from source** in the `linux` job; the Windows `.dll` comes from that ref's
@@ -52,8 +71,9 @@ glibc-forcing path its README describes targets 2.24). The number that matters f
 is the documented runtime, bullseye = **2.31**. Do not reconcile the two by lowering
 `glibc_test.sh` — that weakens the *engine's* guarantee to accommodate a plugin.
 
-The packaging step derives `reunion.cfg` from ReUnion's *own* shipped config for the pinned
-version and changes only the authid policy, so it does not go stale against a bump. It then
+The packaging step derives `reunion.cfg` from ReUnion's *own* shipped config at the built ref
+and changes only the authid policy, so it does not go stale against a bump. It travels in the
+`linux32` artifact beside the binary; there is no release zip to take it from any more. It then
 guards its own output — both plugin binaries per platform, `cid_NoSteam47/48 == 3`, and the
 salt sentinel matching the engine's `REUNION_SALT_SENTINEL` — and fails the build rather than
 publishing a subtly broken archive.
