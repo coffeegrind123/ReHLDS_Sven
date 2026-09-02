@@ -379,6 +379,12 @@ extern cvar_t sv_allow_dlfile;
 extern cvar_t sv_version;
 #ifdef REHLDS_SVEN
 extern cvar_t sv_steamid;
+extern cvar_t sv_hl_beacon;
+extern cvar_t sv_hl_beacon_appid;
+extern cvar_t sv_hl_beacon_gamedir;
+extern cvar_t sv_hl_beacon_port;
+extern cvar_t sv_hl_beacon_version;
+extern cvar_t sv_hl_beacon_desc;
 #endif
 extern cvar_t sv_tags;
 #ifdef REHLDS_FIXES
