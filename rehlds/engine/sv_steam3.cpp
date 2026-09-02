@@ -946,6 +946,8 @@ static double            g_fHLBeaconNextPackets = 0.0;
 static int               g_nHLBeaconIn = 0, g_nHLBeaconInOk = 0, g_nHLBeaconOut = 0;
 static double            g_fHLBeaconNextStats = 0.0;
 static uint64            g_HLBeaconSteamId   = 0;
+static uint64            g_HLBeaconUsers[64];
+static int               g_nHLBeaconUsers    = 0;
 static HSteamUser        g_hHLBeaconUser = 0;
 static ISteamGameServer *g_pHLBeaconGS   = NULL;
 static char              g_szHLBeaconMap[64];
@@ -995,8 +997,15 @@ static int HLBeacon_BuildInfo(char *out, int maxlen)
 			continue;
 		if (cl->fakeclient) ++bots; else ++players;
 	}
-	int maxPlayers = (int)sv_visiblemaxplayers.value;
-	if (maxPlayers < 0)
+	int bots = 0;
+	for (int i = 0; i < g_psvs.maxclients; i++)
+	{
+		client_t *cl = &g_psvs.clients[i];
+		if (cl->active && cl->fakeclient)
+			++bots;
+	}
+
+	int maxPlayers = (int)sv_visiblemaxplayers.value;	if (maxPlayers < 0)
 		maxPlayers = g_psvs.maxclients;
 
 	*p++ = (uint8)players;
@@ -1211,6 +1220,7 @@ static void HLBeacon_Start()
 	g_bHLBeaconLoggedOn = false;
 	g_bHLBeaconWarned = false;
 	g_HLBeaconSteamId = 0;
+	g_nHLBeaconUsers = 0;
 	g_fHLBeaconStarted = Sys_FloatTime();
 
 	Con_Printf("[hl-beacon] appid %u gamedir '%s' version '%s' -- query port %d (%s), game port %d\n",
@@ -1253,7 +1263,44 @@ static void HLBeacon_UpdateDetails()
 		maxPlayers = g_psvs.maxclients;
 
 	g_pHLBeaconGS->SetMaxPlayerCount(maxPlayers);
-	g_pHLBeaconGS->SetBotPlayerCount(0);
+	g_pHLBeaconGS->SetBotPlayerCount(bots);
+
+	// Steam has no "set the player count" call -- it counts the users a registration tells
+	// it about, which is why the Half-Life listing read 0/8 however busy the server was.
+	// The players belong to the primary registration, so mirror them onto this one exactly
+	// as CSteam3Server::RunFrame() reports them to the primary. Same ids, same names, same
+	// scores; the ReUnion-generated ids are already what the Sven listing carries.
+	//
+	// This is steamclient IPC, but at the 5s detail cadence rather than per packet -- the
+	// same cadence as the SetMapName/SetServerName calls above, which demonstrably work on
+	// this pipe. The sven14 deadlock was a call on the PACKET path; this is not that.
+	uint64 cur[64];
+	int nCur = 0;
+	for (int i = 0; i < g_psvs.maxclients && nCur < 64; i++)
+	{
+		client_t *cl = &g_psvs.clients[i];
+		if (!cl->active)
+			continue;
+		g_pHLBeaconGS->BUpdateUserData(cl->network_userid.m_SteamID, cl->name, cl->edict->v.frags);
+		cur[nCur++] = cl->network_userid.m_SteamID;
+	}
+
+	// And tell it who LEFT. Without this the count only ever grows: BUpdateUserData adds
+	// and refreshes, nothing removes, so a server that emptied would still advertise the
+	// high-water mark -- worse than reporting 0.
+	for (int i = 0; i < g_nHLBeaconUsers; i++)
+	{
+		bool bStillHere = false;
+		for (int j = 0; j < nCur; j++)
+		{
+			if (g_HLBeaconUsers[i] == cur[j]) { bStillHere = true; break; }
+		}
+		if (!bStillHere)
+			g_pHLBeaconGS->SendUserDisconnect(g_HLBeaconUsers[i]);
+	}
+	if (nCur > 0)
+		Q_memcpy(g_HLBeaconUsers, cur, nCur * sizeof(uint64));
+	g_nHLBeaconUsers = nCur;
 	g_pHLBeaconGS->SetServerName(Cvar_VariableString("hostname"));
 	g_pHLBeaconGS->SetMapName(g_psv.name);
 	g_pHLBeaconGS->SetPasswordProtected(Cvar_VariableString("sv_password")[0] != 0
