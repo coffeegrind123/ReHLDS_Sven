@@ -23,6 +23,15 @@ on:
 # notice. A TAG is used rather than a commit because only a tag has release assets.
 env:
   MMFG_REF: 'v20260730a'
+  # ReUnion is OURS, and is BUILT rather than downloaded -- for a sharper reason than
+  # metamod's. Upstream's binary is not merely inconvenient here, it is WRONG for this
+  # game: it writes the appid into the 16-bit A2S ID field only, and Sven Co-op's 225840
+  # truncates to 29232, so retail clients dropped the server after pinging it while the
+  # Steam backend listed it the whole time.
+  # NOTE: a BRANCH, not a tag -- pin this to a tag once the fork cuts one, so a release
+  # is reproducible rather than whatever the branch said that day.
+  REUNION_REPO: 'coffeegrind123/ReUnion'
+  REUNION_REF: 'sven-retail-serverinfo'
 
 jobs:
   windows:
@@ -135,6 +144,39 @@ jobs:
           move msvc\${{ env.buildRelease }}\demoplayer.pdb publish\debug\demoplayer.pdb
           move msvc\${{ env.buildRelease }}\filesystem_stdio.pdb publish\debug\filesystem_stdio.pdb
           move msvc\${{ env.buildRelease }}\director.pdb publish\debug\director.pdb
+
+      # The Windows half of ReUnion, from the SAME fork and ref as the Linux half. Until
+      # 2026-09-02 both halves came from upstream's release zip -- so both were the broken
+      # one, and a gamedir/ whose halves come from different source is the hazard this file
+      # warns about at the top. Building both here is what keeps them from drifting.
+      - name: Build ReUnion (Windows)
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch "$env:REUNION_REF" "https://github.com/$env:REUNION_REPO.git" _reu
+          if ($LASTEXITCODE -ne 0) { Write-Error "FATAL: clone of $env:REUNION_REPO@$env:REUNION_REF failed"; exit 1 }
+          # Same toolset the engine just selected, rather than whatever the vcxproj was
+          # last saved with -- an uninstalled toolset fails with an MSB8020 that reads as a
+          # broken project file.
+          $toolset = '${{ steps.select_toolset.outputs.toolset }}'
+          msbuild _reu\msvc\Reunion.sln -p:Configuration=Release /t:Clean,Build /p:Platform=Win32 /p:PlatformToolset=$toolset /p:XPDeprecationWarning=false
+          if ($LASTEXITCODE -ne 0) { Write-Error "FATAL: ReUnion (Windows) build failed"; exit 1 }
+          # OutDir is not overridden in reunion/msvc/Reunion.vcxproj, so find the product
+          # instead of hardcoding a guess at where MSBuild dropped it.
+          $dll = Get-ChildItem -Path _reu -Recurse -Filter reunion_mm.dll -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) { Write-Error "FATAL: reunion_mm.dll was not produced"; exit 1 }
+          New-Item -ItemType Directory -Force -Path publish\plugins | Out-Null
+          Copy-Item $dll.FullName publish\plugins\reunion_mm.dll
+          # Same fork-vs-stock check as the Linux step. Select-String -Encoding byte would
+          # miss it; read the bytes and match on the latin1 view.
+          $bytes = [System.IO.File]::ReadAllBytes("publish\plugins\reunion_mm.dll")
+          $text  = [System.Text.Encoding]::GetEncoding('iso-8859-1').GetString($bytes)
+          if ($text -notmatch 'sv_version') {
+            Write-Error "FATAL: built DLL is STOCK ReUnion, not $env:REUNION_REPO@$env:REUNION_REF"; exit 1
+          }
+          if ($text -match 'zzz_not_in_any_binary_zzz') {
+            Write-Error "FATAL: the fork probe matches everything - it proves nothing"; exit 1
+          }
+          Remove-Item -Recurse -Force _reu
 
       - name: Get app version
         id: get_version
@@ -445,6 +487,53 @@ jobs:
           rm -rf _mmfg
         shell: bash
 
+      # ReUnion gets the same treatment, and must: it answers A2S_INFO ITSELF (a ReHLDS
+      # PreprocessPacket hook that consumes the packet, so neither the engine nor
+      # steamclient ever replies), and upstream's answer cannot carry an appid above
+      # 0xFFFF. Building it here is what stops a release shipping the broken one.
+      - name: Build ReUnion (Linux)
+        run: |
+          set -euo pipefail
+          rm -rf _reu
+          git clone --depth 1 --branch "$REUNION_REF" \
+            "https://github.com/$REUNION_REPO.git" _reu
+          # appversion.sh shells out to git to stamp APP_VERSION -- the `reu_version` that
+          # shows up in A2S_RULES, and the only way to tell this build from stock on the
+          # wire. Inside this container the clone trips git's dubious-ownership guard and
+          # the stamp then comes out empty rather than failing.
+          git config --global --add safe.directory "$PWD/_reu"
+          # -m32 comes from reunion/CMakeLists.txt itself; it is not ours to pass.
+          cmake -B _reu/build -S _reu -DCMAKE_BUILD_TYPE=Release -DUSE_STATIC_LIBSTDC=TRUE
+          cmake --build _reu/build -j"$(nproc)" --target reunion
+          mkdir -p publish/plugins
+          src=$(find _reu/build -name 'reunion_mm_i386.so' -print -quit)
+          [ -n "$src" ] || { echo "FATAL: reunion_mm_i386.so was not produced" >&2; exit 1; }
+          cp "$src" publish/plugins/reunion_mm_i386.so
+          # Metamod loads this as a plugin; without these it logs a bare load failure that
+          # names neither the symbol nor the file.
+          for s in Meta_Query Meta_Attach GiveFnptrsToDll; do
+            grep -aq "$s" publish/plugins/reunion_mm_i386.so \
+              || { echo "FATAL: reunion_mm_i386.so does not export $s" >&2; exit 1; }
+          done
+          # The control for those three: a string that cannot be present must NOT match, or
+          # the greps are matching everything and proved nothing.
+          if grep -aq 'zzz_not_in_any_binary_zzz' publish/plugins/reunion_mm_i386.so; then
+            echo "FATAL: the export probe matches everything" >&2; exit 1
+          fi
+          # THE check. sv_version is read only by our patched getAppVersion(); stock ReUnion
+          # has no such string. A stock binary here would look entirely healthy and quietly
+          # reinstate the bug this fork exists to fix.
+          grep -aq 'sv_version' publish/plugins/reunion_mm_i386.so \
+            || { echo "FATAL: built binary is STOCK ReUnion, not $REUNION_REPO@$REUNION_REF" >&2; exit 1; }
+          # The bundling step starts from ReUnion's OWN shipped config and changes only the
+          # AUTHID policy, so it has to travel with the binary now that there is no release
+          # zip to take it from.
+          [ -f _reu/reunion/dist/reunion.cfg ] \
+            || { echo "FATAL: reunion/dist/reunion.cfg not in the checkout" >&2; exit 1; }
+          cp _reu/reunion/dist/reunion.cfg publish/plugins/reunion.cfg
+          rm -rf _reu
+        shell: bash
+
       - name: Prepare HLSDK
         run: |
           mkdir -p publish/hlsdk
@@ -584,9 +673,8 @@ jobs:
 
       - name: Bundle metamod-fallguys and ReUnion into gamedir/
         env:
-          # Pinned, not "latest", so a release is reproducible and we only ever ship
-          # plugin versions this stack has actually been run against. Bump deliberately.
-          REUNION_VERSION: '0.2.0.25'
+          # REUNION_VERSION is gone: ReUnion is no longer downloaded here. Both halves are
+          # built from $REUNION_REPO@$REUNION_REF in the linux and windows jobs.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -605,9 +693,7 @@ jobs:
             exit 1; }
           gh release download "$MMFG_REF" --repo hzqst/metamod-fallguys \
             --pattern 'metamod-fallguys-windows-x86.zip' -O _plug/mm.zip
-          gh release download "$REUNION_VERSION" --repo rehlds/reunion --pattern '*.zip' -O _plug/ru.zip
           unzip -q _plug/mm.zip -d _plug/mm
-          unzip -q _plug/ru.zip -d _plug/ru
 
           # ⚠ metamod-fallguys lives in addons/metamod/DLLS/, not addons/metamod/ as
           # Metamod-R did. Whatever writes liblist.gam downstream must point at
@@ -615,9 +701,26 @@ jobs:
           # so that path change does NOT propagate on its own.
           cp plugins/metamod.so                       gamedir/addons/metamod/dlls/
           cp _plug/mm/build/addons/metamod/dlls/metamod.dll gamedir/addons/metamod/dlls/
-          # ReUnion ships flat bin/<platform>/ instead.
-          cp _plug/ru/bin/Linux/reunion_mm_i386.so   gamedir/addons/reunion/
-          cp _plug/ru/bin/Windows/reunion_mm.dll     gamedir/addons/reunion/
+          # ReUnion: BOTH halves are built, from one ref, in the linux and windows jobs.
+          # Do NOT "fix" a missing file here by reinstating the upstream release zip. Stock
+          # ReUnion is what made this server invisible to retail clients, and the swap looks
+          # like it worked: the server boots, ReUnion runs, non-Steam clients still join,
+          # and only the Steam browser silently omits us.
+          for f in plugins/reunion_mm_i386.so plugins/reunion_mm.dll; do
+            [ -f "$f" ] || {
+              echo "FATAL: $f missing from the artifacts." >&2
+              echo "       'Build ReUnion (Linux)' / 'Build ReUnion (Windows)' produce these;" >&2
+              echo "       do NOT substitute the rehlds/reunion release asset here." >&2
+              exit 1; }
+            # sv_version is read only by the patched getAppVersion(); stock has no such
+            # string. The bogus control must NOT match, or the probe proves nothing.
+            grep -aq 'sv_version' "$f" || { echo "FATAL: $f is STOCK ReUnion" >&2; exit 1; }
+            if grep -aq 'zzz_not_in_any_binary_zzz' "$f"; then
+              echo "FATAL: the ReUnion fork probe matches everything" >&2; exit 1
+            fi
+          done
+          cp plugins/reunion_mm_i386.so gamedir/addons/reunion/
+          cp plugins/reunion_mm.dll     gamedir/addons/reunion/
 
           # Metamod must be told the REAL game library: liblist.gam points at Metamod,
           # so without this it would recurse into itself.
@@ -672,15 +775,16 @@ jobs:
           win32 addons\reunion\reunion_mm.dll
           EOF
 
-          # Start from ReUnion's OWN shipped config so this tracks whatever version is
-          # pinned above, and change only the AUTHID policy.
+          # Start from ReUnion's OWN shipped config so this tracks the ref built above, and
+          # change only the AUTHID policy. It arrives in the linux32 artifact beside the
+          # binary; there is no release zip to take it from any more.
           #
           # cid_* == 5 means DROP THE CLIENT. Upstream ships cid_NoSteam47/48 = 5, i.e.
           # plain non-Steam clients are rejected by default -- the exact opposite of why
           # anyone deploys ReUnion. 3 = accept and assign a generated STEAM_x:y:z.
           sed -e 's/^cid_NoSteam47 = 5/cid_NoSteam47 = 3/' \
               -e 's/^cid_NoSteam48 = 5/cid_NoSteam48 = 3/' \
-              _plug/ru/reunion.cfg > gamedir/reunion.cfg
+              plugins/reunion.cfg > gamedir/reunion.cfg
 
           # SteamIdHashSalt is NOT optional: with AuthVersion = 3 an empty salt makes
           # ReUnion fail to init, and it fails almost silently -- Metamod still reports
