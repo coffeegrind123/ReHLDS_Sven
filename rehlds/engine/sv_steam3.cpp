@@ -943,6 +943,8 @@ static double            g_fHLBeaconStarted  = 0.0;
 static bool              g_bHLBeaconWarned   = false;
 static SOCKET            g_hHLBeaconSock     = INVALID_SOCKET;
 static double            g_fHLBeaconNextPackets = 0.0;
+static int               g_nHLBeaconIn = 0, g_nHLBeaconInOk = 0, g_nHLBeaconOut = 0;
+static double            g_fHLBeaconNextStats = 0.0;
 static HSteamUser        g_hHLBeaconUser = 0;
 static ISteamGameServer *g_pHLBeaconGS   = NULL;
 static char              g_szHLBeaconMap[64];
@@ -1187,8 +1189,21 @@ static void HLBeacon_RunFrame()
 		while ((ret = CRehldsPlatformHolder::get()->recvfrom(g_hHLBeaconSock, buf, sizeof(buf), 0, &from, &fromlen)) > 0)
 		{
 			struct sockaddr_in *pIn = (struct sockaddr_in *)&from;
-			g_pHLBeaconGS->HandleIncomingPacket(buf, ret, ntohl(pIn->sin_addr.s_addr), ntohs(pIn->sin_port));
+			++g_nHLBeaconIn;
+			if (g_pHLBeaconGS->HandleIncomingPacket(buf, ret, ntohl(pIn->sin_addr.s_addr), ntohs(pIn->sin_port)))
+				++g_nHLBeaconInOk;
 			fromlen = sizeof(from);
+		}
+
+		// Whether steamclient will ANSWER for a secondary registration is the open question.
+		// in= what we fed it, ok= how many it claimed, out= how many replies it produced.
+		// "in>0 ok>0 out=0" means it accepts the queries and declines to answer them, which
+		// would settle that a second in-process registration cannot serve queries at all.
+		if (g_nHLBeaconIn && fCurTime > g_fHLBeaconNextStats)
+		{
+			g_fHLBeaconNextStats = fCurTime + 15.0;
+			Con_Printf("[hl-beacon] queries in=%d handled=%d replies-out=%d\n",
+				g_nHLBeaconIn, g_nHLBeaconInOk, g_nHLBeaconOut);
 		}
 
 		uint32 ip;
@@ -1202,6 +1217,7 @@ static void HLBeacon_RunFrame()
 			to.sin_addr.s_addr = htonl(ip);
 			to.sin_port = htons(port);
 			CRehldsPlatformHolder::get()->sendto(g_hHLBeaconSock, buf, iLen, 0, (struct sockaddr *)&to, sizeof(to));
+			++g_nHLBeaconOut;
 			iLen = g_pHLBeaconGS->GetNextOutgoingPacket(buf, sizeof(buf), &ip, &port);
 		}
 	}
