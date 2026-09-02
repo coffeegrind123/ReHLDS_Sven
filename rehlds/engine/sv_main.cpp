@@ -251,6 +251,16 @@ cvar_t sv_visiblemaxplayers = { "sv_visiblemaxplayers", "-1", 0, 0.0f, NULL };
 // server has no such cvar, and the point of the exercise is to be indistinguishable
 // from one. pfnCVarGetString reads it regardless of flags.
 cvar_t sv_steamid = { "sv_steamid", "0", 0, 0.0f, NULL };
+
+// Half-Life master-list beacon. See the block above Steam_RunFrame() in sv_steam3.cpp.
+// All non-FCVAR_SERVER on purpose: they must stay OUT of A2S_RULES, because the point of
+// this server is to be indistinguishable from a retail one and retail has no such keys.
+cvar_t sv_hl_beacon         = { "sv_hl_beacon",         "0",             0, 0.0f, NULL };
+cvar_t sv_hl_beacon_appid   = { "sv_hl_beacon_appid",   "70",            0, 0.0f, NULL };
+cvar_t sv_hl_beacon_gamedir = { "sv_hl_beacon_gamedir", "valve",         0, 0.0f, NULL };
+cvar_t sv_hl_beacon_port    = { "sv_hl_beacon_port",    "27016",         0, 0.0f, NULL };
+cvar_t sv_hl_beacon_version = { "sv_hl_beacon_version", "1.1.2.2/Stdio", 0, 0.0f, NULL };
+cvar_t sv_hl_beacon_desc    = { "sv_hl_beacon_desc",    "Half-Life",     0, 0.0f, NULL };
 #endif
 
 cvar_t sv_downloadurl = { "sv_downloadurl", "", FCVAR_PROTECTED, 0.0f, NULL };
@@ -9126,6 +9136,12 @@ void SV_Init(void)
 	Cvar_RegisterVariable(&sv_version);
 #ifdef REHLDS_SVEN
 	Cvar_RegisterVariable(&sv_steamid);
+	Cvar_RegisterVariable(&sv_hl_beacon);
+	Cvar_RegisterVariable(&sv_hl_beacon_appid);
+	Cvar_RegisterVariable(&sv_hl_beacon_gamedir);
+	Cvar_RegisterVariable(&sv_hl_beacon_port);
+	Cvar_RegisterVariable(&sv_hl_beacon_version);
+	Cvar_RegisterVariable(&sv_hl_beacon_desc);
 #endif
 	Cvar_RegisterVariable(&sv_allow_dlfile);
 #ifdef REHLDS_FIXES
