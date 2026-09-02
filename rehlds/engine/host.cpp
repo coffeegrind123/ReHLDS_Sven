@@ -1038,7 +1038,12 @@ void Host_Version(void)
 	char szFileName[MAX_PATH];
 
 #ifdef REHLDS_SVEN
-	Q_strcpy(gpszVersionString, "5.0.18");
+	// Retail Sven Co-op reports "5.0.1.8" -- the literal is in its own engine_i686.so, and
+	// 328 of the 343 servers on the Steam master report exactly that. "5.0.18" is that
+	// string with the third dot dropped, and it reached both the master heartbeat (via
+	// SteamGameServer_Init) and -- since ReUnion derives its A2S app version from
+	// sv_version -- the query response too. Nothing else in the world reports it.
+	Q_strcpy(gpszVersionString, "5.0.1.8");
 	Q_strcpy(gpszProductString, "svencoop");
 #else //!REHLDS_SVEN
 	Q_strcpy(gpszVersionString, "1.0.14");
