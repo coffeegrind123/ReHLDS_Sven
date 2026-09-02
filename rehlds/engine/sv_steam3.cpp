@@ -1151,7 +1151,15 @@ static void HLBeacon_Start()
 	// other than the one SteamGameServer_GetHSteamPipe() names. ISteamClient::RunFrame()
 	// did not do it either. Owning the socket removes the dependency entirely, and it is
 	// the same shuttle CSteam3Server::RunFrame() already runs for the primary.
-	if (!pGS->InitGameServer(unIP, (uint16)gamePort, 0xFFFFu, unFlags, nAppId, sv_hl_beacon_version.string))
+	// THE port Steam advertises as the query address, and the whole listing turns on it.
+	// With USEGAMESOCKETSHARE, Steam tells clients to query the GAME port -- measured: the
+	// appid-70 entry came back as 89.58.31.15:27015, so a Half-Life client in the Internet
+	// list queried 27015, got ReUnion's Sven reply (folder svencoop, "Sven Co-op 5.26") and
+	// discarded the server. It was answering on a port nobody was told to ask.
+	bool bOwnQuery = sv_hl_beacon_ownquery.value > 0.0f;
+	uint16 usQuery = bOwnQuery ? 0xFFFFu : (uint16)queryPort;
+
+	if (!pGS->InitGameServer(unIP, (uint16)gamePort, usQuery, unFlags, nAppId, sv_hl_beacon_version.string))
 	{
 		Con_Printf("[hl-beacon] InitGameServer failed (appid %u, query port %d)\n", (unsigned)nAppId, queryPort);
 		pClient->ReleaseUser(hPipe, hUser);
@@ -1178,9 +1186,14 @@ static void HLBeacon_Start()
 	pGS->SetAdvertiseServerActive(true);
 	pGS->SetMasterServerHeartbeatInterval(200);
 
-	// NET_IPSocket() is the engine's portable opener (winsock/BSD, non-blocking, reuse).
-	g_hHLBeaconSock = NET_IPSocket(ipname.string, queryPort, FALSE);
-	if (g_hHLBeaconSock == INVALID_SOCKET)
+	// Only in own-query mode. Otherwise steamclient binds this port itself and two binds
+	// would fight over it.
+	if (!bOwnQuery)
+		g_hHLBeaconSock = INVALID_SOCKET;
+	else
+		g_hHLBeaconSock = NET_IPSocket(ipname.string, queryPort, FALSE);
+
+	if (bOwnQuery && g_hHLBeaconSock == INVALID_SOCKET)
 	{
 		Con_Printf("[hl-beacon] could not bind udp %d for the beacon query socket\n", queryPort);
 		pGS->LogOff();
@@ -1200,8 +1213,9 @@ static void HLBeacon_Start()
 	g_HLBeaconSteamId = 0;
 	g_fHLBeaconStarted = Sys_FloatTime();
 
-	Con_Printf("[hl-beacon] appid %u gamedir '%s' version '%s' -- answering on udp %d, advertising game port %d\n",
-		(unsigned)nAppId, sv_hl_beacon_gamedir.string, sv_hl_beacon_version.string, queryPort, gamePort);
+	Con_Printf("[hl-beacon] appid %u gamedir '%s' version '%s' -- query port %d (%s), game port %d\n",
+		(unsigned)nAppId, sv_hl_beacon_gamedir.string, sv_hl_beacon_version.string, queryPort,
+		bOwnQuery ? "ours" : "steamclient", gamePort);
 }
 
 static void HLBeacon_UpdateDetails()
