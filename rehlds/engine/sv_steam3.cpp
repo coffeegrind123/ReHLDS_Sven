@@ -936,7 +936,22 @@ void Steam_Activate()
 #define HLB_FLAG_DEDICATED  0x04
 #define HLB_FLAG_LINUX      0x08
 
+// steamclient opens and owns the beacon's query socket, but it only services it when the
+// owning pipe is pumped -- and SteamGameServer_RunCallbacks() pumps only the pipe
+// SteamGameServer_GetHSteamPipe() names, not ours. Measured on the first deployment: the
+// socket was bound (ss showed hlds_linux holding udp/27016) and queries piled up unread,
+// Recv-Q 1280 and climbing, so the server was listed and then silently unanswerable.
+//
+// ISteamClient::RunFrame() is the only pump that reaches another pipe. Manual dispatch is
+// NOT an option -- the SDK forbids mixing SteamAPI_ManualDispatch_* with
+// SteamGameServer_RunCallbacks and STEAM_CALLBACK members, and CSteam3Server is built on
+// both, so switching would break client approve/deny. STEAM_PRIVATE_API only makes
+// RunFrame `protected`; a derived type republishes it. Same object, same vtable entry,
+// nothing but the C++ access check changes.
+struct CHLBeaconClientAccess : public ISteamClient { using ISteamClient::RunFrame; };
+
 static HSteamPipe        g_hHLBeaconPipe = 0;
+static double            g_fHLBeaconNextPump = 0.0;
 static HSteamUser        g_hHLBeaconUser = 0;
 static ISteamGameServer *g_pHLBeaconGS   = NULL;
 static char              g_szHLBeaconMap[64];
@@ -1088,8 +1103,21 @@ static void HLBeacon_RunFrame()
 	if (!g_hHLBeaconPipe)
 		HLBeacon_Start();
 
-	if (g_hHLBeaconPipe)
-		HLBeacon_UpdateDetails();
+	if (!g_hHLBeaconPipe)
+		return;
+
+	HLBeacon_UpdateDetails();
+
+	// Same 0.1s cadence CSteam3Server::RunFrame() uses for its own callbacks. Without this
+	// the query socket fills and never answers -- see the note on CHLBeaconClientAccess.
+	double fCurTime = Sys_FloatTime();
+	if (fCurTime - g_fHLBeaconNextPump > 0.1)
+	{
+		g_fHLBeaconNextPump = fCurTime;
+		ISteamClient *pClient = SteamGameServerClient();
+		if (pClient)
+			((CHLBeaconClientAccess *)pClient)->RunFrame();
+	}
 }
 #endif // REHLDS_SVEN
 
