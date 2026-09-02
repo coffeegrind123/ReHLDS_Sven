@@ -877,8 +877,227 @@ void Steam_Activate()
 	Steam3Server()->Activate();
 }
 
+#ifdef REHLDS_SVEN
+// ===========================================================================
+// Half-Life master-list beacon (sv_hl_beacon, default OFF)
+//
+// WHAT IT IS
+//   A SECOND Steam game-server registration, from this same process, under a
+//   different appid -- so one server appears in two master lists at once. We
+//   list under Sven Co-op (225840) as ourselves, and additionally under the
+//   Half-Life family (70, gamedir "valve") so stock Half-Life clients can find
+//   us. They can already JOIN: the per-client dialect probe and
+//   sv_proto_hl_gamedir handle a stock GoldSrc client end to end. Only
+//   DISCOVERY was missing, and discovery is keyed by appid.
+//
+// WHY IT IS POSSIBLE AT ALL
+//   SteamGameServer_Init() takes no appid -- it reads steam_appid.txt, which is
+//   process-global, and that is where "one process, one appid" comes from. But
+//   that helper is only a wrapper: the interface underneath,
+//       ISteamGameServer::InitGameServer(ip, gamePort, queryPort, flags,
+//                                        AppId_t nGameAppId, version)
+//   takes the appid as a PARAMETER. ISteamClient::CreateLocalUser() hands out an
+//   independent game-server user, so a second registration is a second local
+//   user plus a second InitGameServer with a different appid. No child process,
+//   no relay, no second game server.
+//
+// WHY THE PORTS ARE SPLIT
+//   Steam stores a server's connection port and query port separately
+//   (servernetadr_t::m_usConnectionPort / m_usQueryPort), and a client connects
+//   to the CONNECTION port. So the beacon answers queries on its own port while
+//   advertising the REAL game port -- a Half-Life client finds it under "valve"
+//   and then connects straight to the real server. Nothing is proxied and the
+//   player pool is not split.
+//
+//   Passing a real query port (not MASTERSERVERUPDATERPORT_USEGAMESOCKETSHARE)
+//   means steamclient opens that socket and answers A2S itself from the details
+//   set below. That is why there is no A2S code here.
+//
+// ** KNOWN LIMITATION, AND IT IS VISIBLE TO PLAYERS **
+//   The beacon has no connected users of its own, so the Half-Life listing
+//   reports 0 players however busy the real server is. Player counts on the
+//   Steam side come from BUpdateUserData for users of THAT registration, and
+//   the real players belong to the other one. Reporting them as bots would fill
+//   the number in with a lie, so it is left alone. Max players, hostname and map
+//   are all real.
+//
+// ** UNPROVEN IN THE WILD **
+//   Of 1483 appid-70 servers, only 26 advertise a query port different from
+//   their game port, and all 26 are HLTV proxies with gameport 0. The data model
+//   supports what this does; no ordinary server exercises it. If a Half-Life
+//   client turns out to connect to the query port instead, that is the thing to
+//   look at first.
+// ===========================================================================
+
+// Steamworks EServerFlags. This SDK snapshot does not carry them, so they are
+// restated rather than guessed at the call site.
+#define HLB_FLAG_ACTIVE     0x01
+#define HLB_FLAG_SECURE     0x02
+#define HLB_FLAG_DEDICATED  0x04
+#define HLB_FLAG_LINUX      0x08
+
+static HSteamPipe        g_hHLBeaconPipe = 0;
+static HSteamUser        g_hHLBeaconUser = 0;
+static ISteamGameServer *g_pHLBeaconGS   = NULL;
+static char              g_szHLBeaconMap[64];
+static double            g_fHLBeaconNextUpdate = 0.0;
+
+static void HLBeacon_Stop()
+{
+	if (!g_hHLBeaconPipe)
+		return;
+
+	if (g_pHLBeaconGS)
+	{
+		g_pHLBeaconGS->LogOff();
+		g_pHLBeaconGS = NULL;
+	}
+
+	ISteamClient *pClient = SteamGameServerClient();
+	if (pClient)
+	{
+		if (g_hHLBeaconUser)
+			pClient->ReleaseUser(g_hHLBeaconPipe, g_hHLBeaconUser);
+		pClient->BReleaseSteamPipe(g_hHLBeaconPipe);
+	}
+
+	g_hHLBeaconPipe = 0;
+	g_hHLBeaconUser = 0;
+	g_szHLBeaconMap[0] = 0;
+	Con_Printf("[hl-beacon] stopped\n");
+}
+
+static void HLBeacon_Start()
+{
+	ISteamClient *pClient = SteamGameServerClient();
+	if (!pClient)
+		return;   // steamclient not up yet; try again next frame
+
+	int queryPort = (int)sv_hl_beacon_port.value;
+	int gamePort  = (int)iphostport.value;
+	if (gamePort == 0)
+		gamePort = (int)hostport.value;
+
+	// A beacon that answers on the game port would fight the engine for the socket,
+	// and one on port 0 would never be reachable. Refuse instead of half-starting.
+	if (queryPort <= 0 || queryPort > 65535 || queryPort == gamePort)
+	{
+		Con_Printf("[hl-beacon] refusing to start: sv_hl_beacon_port %d is invalid or equals the game port %d\n", queryPort, gamePort);
+		Cvar_SetValue("sv_hl_beacon", 0.0f);
+		return;
+	}
+
+	HSteamPipe hPipe = 0;
+	HSteamUser hUser = pClient->CreateLocalUser(&hPipe, k_EAccountTypeGameServer);
+	if (!hPipe || !hUser)
+	{
+		Con_Printf("[hl-beacon] steamclient would not create a second game-server user\n");
+		Cvar_SetValue("sv_hl_beacon", 0.0f);
+		return;
+	}
+
+	ISteamGameServer *pGS = pClient->GetISteamGameServer(hUser, hPipe, STEAMGAMESERVER_INTERFACE_VERSION);
+	if (!pGS)
+	{
+		Con_Printf("[hl-beacon] steamclient has no %s for the beacon user\n", STEAMGAMESERVER_INTERFACE_VERSION);
+		pClient->ReleaseUser(hPipe, hUser);
+		pClient->BReleaseSteamPipe(hPipe);
+		Cvar_SetValue("sv_hl_beacon", 0.0f);
+		return;
+	}
+
+	uint32 unIP = 0;
+	if (net_local_adr.type == NA_IP)
+		unIP = ntohl(*(u_long *)&net_local_adr.ip[0]);
+
+	uint32 unFlags = HLB_FLAG_ACTIVE | HLB_FLAG_DEDICATED;
+#ifndef _WIN32
+	unFlags |= HLB_FLAG_LINUX;
+#endif
+
+	// NOT secure: VAC protects the primary registration, not this one. Claiming it
+	// here would advertise a guarantee nothing is enforcing.
+	AppId_t nAppId = (AppId_t)(int)sv_hl_beacon_appid.value;
+
+	if (!pGS->InitGameServer(unIP, (uint16)gamePort, (uint16)queryPort, unFlags, nAppId, sv_hl_beacon_version.string))
+	{
+		Con_Printf("[hl-beacon] InitGameServer failed (appid %u, query port %d)\n", (unsigned)nAppId, queryPort);
+		pClient->ReleaseUser(hPipe, hUser);
+		pClient->BReleaseSteamPipe(hPipe);
+		Cvar_SetValue("sv_hl_beacon", 0.0f);
+		return;
+	}
+
+	// Product and mod dir are what put us under "valve" rather than beside Sven.
+	pGS->SetProduct(sv_hl_beacon_gamedir.string);
+	pGS->SetGameDescription(sv_hl_beacon_desc.string);
+	pGS->SetModDir(sv_hl_beacon_gamedir.string);
+	pGS->SetDedicatedServer(true);
+	pGS->LogOnAnonymous();
+
+	g_hHLBeaconPipe = hPipe;
+	g_hHLBeaconUser = hUser;
+	g_pHLBeaconGS   = pGS;
+	g_fHLBeaconNextUpdate = 0.0;
+	g_szHLBeaconMap[0] = 0;
+
+	Con_Printf("[hl-beacon] appid %u gamedir '%s' version '%s' -- answering on udp %d, advertising game port %d\n",
+		(unsigned)nAppId, sv_hl_beacon_gamedir.string, sv_hl_beacon_version.string, queryPort, gamePort);
+}
+
+static void HLBeacon_UpdateDetails()
+{
+	double fCurTime = Sys_FloatTime();
+	bool bMapChanged = Q_stricmp(g_szHLBeaconMap, g_psv.name) != 0;
+
+	if (!bMapChanged && fCurTime < g_fHLBeaconNextUpdate)
+		return;
+
+	g_fHLBeaconNextUpdate = fCurTime + 5.0;
+	Q_strncpy(g_szHLBeaconMap, g_psv.name, sizeof(g_szHLBeaconMap) - 1);
+	g_szHLBeaconMap[sizeof(g_szHLBeaconMap) - 1] = 0;
+
+	int maxPlayers = (int)sv_visiblemaxplayers.value;
+	if (maxPlayers < 0)
+		maxPlayers = g_psvs.maxclients;
+
+	g_pHLBeaconGS->SetMaxPlayerCount(maxPlayers);
+	g_pHLBeaconGS->SetBotPlayerCount(0);
+	g_pHLBeaconGS->SetServerName(Cvar_VariableString("hostname"));
+	g_pHLBeaconGS->SetMapName(g_psv.name);
+	g_pHLBeaconGS->SetPasswordProtected(Cvar_VariableString("sv_password")[0] != 0
+		&& Q_stricmp(Cvar_VariableString("sv_password"), "none") != 0
+		&& Q_stricmp(Cvar_VariableString("sv_password"), "0") != 0);
+}
+
+static void HLBeacon_RunFrame()
+{
+	// sv_lan hides the primary registration from the master; advertising a second
+	// one from the same box would contradict that outright.
+	bool bWant = sv_hl_beacon.value > 0.0f
+		&& sv_lan.value <= 0.0f
+		&& g_psvs.maxclients > 1
+		&& g_psv.active;
+
+	if (!bWant)
+	{
+		HLBeacon_Stop();
+		return;
+	}
+
+	if (!g_hHLBeaconPipe)
+		HLBeacon_Start();
+
+	if (g_hHLBeaconPipe)
+		HLBeacon_UpdateDetails();
+}
+#endif // REHLDS_SVEN
+
 void Steam_RunFrame()
 {
+#ifdef REHLDS_SVEN
+	HLBeacon_RunFrame();
+#endif
 	if (Steam3Server())
 	{
 		Steam3Server()->RunFrame();
