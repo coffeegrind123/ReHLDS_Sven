@@ -950,6 +950,84 @@ static ISteamGameServer *g_pHLBeaconGS   = NULL;
 static char              g_szHLBeaconMap[64];
 static double            g_fHLBeaconNextUpdate = 0.0;
 
+// Build the A2S_INFO reply for the beacon ourselves.
+//
+// steamclient will not do it: measured over sven13, it ACCEPTED every query fed to
+// HandleIncomingPacket (in=4 handled=4) and produced zero outgoing packets. A second
+// in-process registration takes queries and declines to serve them.
+//
+// Shape measured 2026-09-02 against live retail Half-Life servers:
+//   proto=48  appid=70  folder=valve  game=Half-Life  ver=1.1.2.2/Stdio
+// appid 70 fits the 16-bit ID field, so unlike the Sven response this needs no 64-bit
+// GameID -- the whole reason the Sven side needed one does not apply here.
+//
+// Building it by hand also fixes what the Steam path could not: the player count is real.
+// Steam derives that from BUpdateUserData for users of THAT registration, and the players
+// belong to the primary, so the listing would always have read 0/N.
+static int HLBeacon_BuildInfo(char *out, int maxlen)
+{
+	char *p = out;
+	const char *hostname = Cvar_VariableString("hostname");
+
+	if (maxlen < 512)
+		return 0;
+
+	uint32 header = 0xFFFFFFFF;
+	Q_memcpy(p, &header, 4); p += 4;
+	*p++ = 'I';                                    // S2A_INFO
+	*p++ = 48;                                     // protocol: what retail GoldSrc sends
+
+	int n;
+	n = Q_strlen(hostname);                        Q_memcpy(p, hostname, n + 1); p += n + 1;
+	n = Q_strlen(g_psv.name);                      Q_memcpy(p, g_psv.name, n + 1); p += n + 1;
+	n = Q_strlen(sv_hl_beacon_gamedir.string);     Q_memcpy(p, sv_hl_beacon_gamedir.string, n + 1); p += n + 1;
+	n = Q_strlen(sv_hl_beacon_desc.string);        Q_memcpy(p, sv_hl_beacon_desc.string, n + 1); p += n + 1;
+
+	uint16 appid = (uint16)(int)sv_hl_beacon_appid.value;
+	Q_memcpy(p, &appid, 2); p += 2;
+
+	int players = 0, bots = 0;
+	for (int i = 0; i < g_psvs.maxclients; i++)
+	{
+		client_t *cl = &g_psvs.clients[i];
+		if (!cl->active && !cl->spawned && !cl->connected)
+			continue;
+		if (cl->fakeclient) ++bots; else ++players;
+	}
+	int maxPlayers = (int)sv_visiblemaxplayers.value;
+	if (maxPlayers < 0)
+		maxPlayers = g_psvs.maxclients;
+
+	*p++ = (uint8)players;
+	*p++ = (uint8)maxPlayers;
+	*p++ = (uint8)bots;
+	*p++ = 'd';                                    // dedicated
+#ifdef _WIN32
+	*p++ = 'w';
+#else
+	*p++ = 'l';
+#endif
+	*p++ = (uint8)(Cvar_VariableString("sv_password")[0] != 0
+		&& Q_stricmp(Cvar_VariableString("sv_password"), "0") != 0
+		&& Q_stricmp(Cvar_VariableString("sv_password"), "none") != 0);
+	*p++ = 0;                                      // VAC: the primary is secure, this is not
+
+	n = Q_strlen(sv_hl_beacon_version.string);     Q_memcpy(p, sv_hl_beacon_version.string, n + 1); p += n + 1;
+
+	// EDF: game port + our own Steam ID. Both retail shapes seen in the wild (0x80 and
+	// 0xB1) are supersets/subsets of this; the port is the load-bearing one, because it is
+	// what sends a Half-Life client to the REAL server instead of to this beacon socket.
+	*p++ = (char)(0x80 | 0x10);
+	uint16 gamePort = (uint16)(int)iphostport.value;
+	if (gamePort == 0)
+		gamePort = (uint16)(int)hostport.value;
+	Q_memcpy(p, &gamePort, 2); p += 2;
+	uint64 sid = g_pHLBeaconGS ? g_pHLBeaconGS->GetSteamID().ConvertToUint64() : 0;
+	Q_memcpy(p, &sid, 8); p += 8;
+
+	return (int)(p - out);
+}
+
 static void HLBeacon_Stop()
 {
 	if (!g_hHLBeaconPipe)
@@ -1190,8 +1268,27 @@ static void HLBeacon_RunFrame()
 		{
 			struct sockaddr_in *pIn = (struct sockaddr_in *)&from;
 			++g_nHLBeaconIn;
-			if (g_pHLBeaconGS->HandleIncomingPacket(buf, ret, ntohl(pIn->sin_addr.s_addr), ntohs(pIn->sin_port)))
+
+			uint32 hdr = 0;
+			if (ret >= 5)
+				Q_memcpy(&hdr, buf, 4);
+
+			if (ret >= 5 && hdr == 0xFFFFFFFF && buf[4] == 'T')
+			{
+				// A2S_INFO. Answer it here; steamclient will not.
+				char reply[1024];
+				int n = HLBeacon_BuildInfo(reply, sizeof(reply));
+				if (n > 0)
+				{
+					CRehldsPlatformHolder::get()->sendto(g_hHLBeaconSock, reply, n, 0, &from, sizeof(struct sockaddr_in));
+					++g_nHLBeaconOut;
+				}
 				++g_nHLBeaconInOk;
+			}
+			else if (g_pHLBeaconGS->HandleIncomingPacket(buf, ret, ntohl(pIn->sin_addr.s_addr), ntohs(pIn->sin_port)))
+			{
+				++g_nHLBeaconInOk;
+			}
 			fromlen = sizeof(from);
 		}
 
