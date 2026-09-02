@@ -936,25 +936,13 @@ void Steam_Activate()
 #define HLB_FLAG_DEDICATED  0x04
 #define HLB_FLAG_LINUX      0x08
 
-// steamclient opens and owns the beacon's query socket, but it only services it when the
-// owning pipe is pumped -- and SteamGameServer_RunCallbacks() pumps only the pipe
-// SteamGameServer_GetHSteamPipe() names, not ours. Measured on the first deployment: the
-// socket was bound (ss showed hlds_linux holding udp/27016) and queries piled up unread,
-// Recv-Q 1280 and climbing, so the server was listed and then silently unanswerable.
-//
-// ISteamClient::RunFrame() is the only pump that reaches another pipe. Manual dispatch is
-// NOT an option -- the SDK forbids mixing SteamAPI_ManualDispatch_* with
-// SteamGameServer_RunCallbacks and STEAM_CALLBACK members, and CSteam3Server is built on
-// both, so switching would break client approve/deny. STEAM_PRIVATE_API only makes
-// RunFrame `protected`; a derived type republishes it. Same object, same vtable entry,
-// nothing but the C++ access check changes.
-struct CHLBeaconClientAccess : public ISteamClient { using ISteamClient::RunFrame; };
-
 static HSteamPipe        g_hHLBeaconPipe = 0;
 static double            g_fHLBeaconNextPump = 0.0;
 static bool              g_bHLBeaconLoggedOn = false;
 static double            g_fHLBeaconStarted  = 0.0;
 static bool              g_bHLBeaconWarned   = false;
+static SOCKET            g_hHLBeaconSock     = INVALID_SOCKET;
+static double            g_fHLBeaconNextPackets = 0.0;
 static HSteamUser        g_hHLBeaconUser = 0;
 static ISteamGameServer *g_pHLBeaconGS   = NULL;
 static char              g_szHLBeaconMap[64];
@@ -979,6 +967,11 @@ static void HLBeacon_Stop()
 		pClient->BReleaseSteamPipe(g_hHLBeaconPipe);
 	}
 
+	if (g_hHLBeaconSock != INVALID_SOCKET)
+	{
+		CRehldsPlatformHolder::get()->closesocket(g_hHLBeaconSock);
+		g_hHLBeaconSock = INVALID_SOCKET;
+	}
 	g_hHLBeaconPipe = 0;
 	g_hHLBeaconUser = 0;
 	g_szHLBeaconMap[0] = 0;
@@ -1063,7 +1056,15 @@ static void HLBeacon_Start()
 	// here would advertise a guarantee nothing is enforcing.
 	AppId_t nAppId = (AppId_t)(int)sv_hl_beacon_appid.value;
 
-	if (!pGS->InitGameServer(unIP, (uint16)gamePort, (uint16)queryPort, unFlags, nAppId, sv_hl_beacon_version.string))
+	// MASTERSERVERUPDATERPORT_USEGAMESOCKETSHARE. steamclient will NOT open a socket of
+	// its own; it hands us packets to send and expects to be fed what arrives. That is
+	// deliberate: when it owned the socket (sven8-sven11) it bound the port and then never
+	// serviced it -- Recv-Q sat at 5120 across three samples three seconds apart -- because
+	// it only services a socket while the owning pipe is pumped, and nothing pumps a pipe
+	// other than the one SteamGameServer_GetHSteamPipe() names. ISteamClient::RunFrame()
+	// did not do it either. Owning the socket removes the dependency entirely, and it is
+	// the same shuttle CSteam3Server::RunFrame() already runs for the primary.
+	if (!pGS->InitGameServer(unIP, (uint16)gamePort, 0xFFFFu, unFlags, nAppId, sv_hl_beacon_version.string))
 	{
 		Con_Printf("[hl-beacon] InitGameServer failed (appid %u, query port %d)\n", (unsigned)nAppId, queryPort);
 		pClient->ReleaseUser(hPipe, hUser);
@@ -1078,6 +1079,18 @@ static void HLBeacon_Start()
 	pGS->SetModDir(sv_hl_beacon_gamedir.string);
 	pGS->SetDedicatedServer(true);
 	pGS->LogOnAnonymous();
+
+	// NET_IPSocket() is the engine's portable opener (winsock/BSD, non-blocking, reuse).
+	g_hHLBeaconSock = NET_IPSocket(ipname.string, queryPort, FALSE);
+	if (g_hHLBeaconSock == INVALID_SOCKET)
+	{
+		Con_Printf("[hl-beacon] could not bind udp %d for the beacon query socket\n", queryPort);
+		pGS->LogOff();
+		pClient->ReleaseUser(hPipe, hUser);
+		pClient->BReleaseSteamPipe(hPipe);
+		Cvar_SetValue("sv_hl_beacon", 0.0f);
+		return;
+	}
 
 	g_hHLBeaconPipe = hPipe;
 	g_hHLBeaconUser = hUser;
@@ -1158,15 +1171,39 @@ static void HLBeacon_RunFrame()
 
 	HLBeacon_UpdateDetails();
 
-	// Same 0.1s cadence CSteam3Server::RunFrame() uses for its own callbacks. Without this
-	// the query socket fills and never answers -- see the note on CHLBeaconClientAccess.
+	// Feed steamclient what arrived, then send what it wants sent -- the same order and
+	// cadence CSteam3Server::RunFrame() uses. HandleIncomingPacket must come first; the
+	// SDK is explicit that GetNextOutgoingPacket is called AFTER the frame's inbound
+	// packets have been handed over.
 	double fCurTime = Sys_FloatTime();
-	if (fCurTime - g_fHLBeaconNextPump > 0.1)
+	if (fCurTime - g_fHLBeaconNextPackets > 0.01 && g_hHLBeaconSock != INVALID_SOCKET)
 	{
-		g_fHLBeaconNextPump = fCurTime;
-		ISteamClient *pClient = SteamGameServerClient();
-		if (pClient)
-			((CHLBeaconClientAccess *)pClient)->RunFrame();
+		g_fHLBeaconNextPackets = fCurTime;
+
+		char buf[4096];
+		struct sockaddr from;
+		socklen_t fromlen = sizeof(from);
+		int ret;
+		while ((ret = CRehldsPlatformHolder::get()->recvfrom(g_hHLBeaconSock, buf, sizeof(buf), 0, &from, &fromlen)) > 0)
+		{
+			struct sockaddr_in *pIn = (struct sockaddr_in *)&from;
+			g_pHLBeaconGS->HandleIncomingPacket(buf, ret, ntohl(pIn->sin_addr.s_addr), ntohs(pIn->sin_port));
+			fromlen = sizeof(from);
+		}
+
+		uint32 ip;
+		uint16 port;
+		int iLen = g_pHLBeaconGS->GetNextOutgoingPacket(buf, sizeof(buf), &ip, &port);
+		while (iLen > 0)
+		{
+			struct sockaddr_in to;
+			Q_memset(&to, 0, sizeof(to));
+			to.sin_family = AF_INET;
+			to.sin_addr.s_addr = htonl(ip);
+			to.sin_port = htons(port);
+			CRehldsPlatformHolder::get()->sendto(g_hHLBeaconSock, buf, iLen, 0, (struct sockaddr *)&to, sizeof(to));
+			iLen = g_pHLBeaconGS->GetNextOutgoingPacket(buf, sizeof(buf), &ip, &port);
+		}
 	}
 }
 #endif // REHLDS_SVEN
