@@ -1005,8 +1005,38 @@ static void HLBeacon_Start()
 		return;
 	}
 
+	uint32 unIP = 0;
+	if (net_local_adr.type == NA_IP)
+		unIP = ntohl(*(u_long *)&net_local_adr.ip[0]);
+
+	// A second game-server user needs its own local binding. The primary gets one from
+	// SteamGameServer_Init's usSteamPort (26900 by default, -sport overrides);
+	// InitGameServer has no equivalent parameter, so without this the beacon has no
+	// distinct address to reach the Steam CM from -- it registers, opens its query socket,
+	// and then never logs on, which is exactly what sven8/sven9 did.
+	//
+	// The header is explicit that this must happen BEFORE CreateLocalUser(), so it cannot
+	// be folded in with the InitGameServer call below.
+	SteamIPAddress_t bindAddr;
+	Q_memset(&bindAddr, 0, sizeof(bindAddr));
+	bindAddr.m_eType = k_ESteamIPTypeIPv4;
+	bindAddr.m_unIPv4 = unIP;
+	pClient->SetLocalIPBinding(bindAddr, (uint16)(int)sv_hl_beacon_sport.value);
+
 	HSteamPipe hPipe = 0;
 	HSteamUser hUser = pClient->CreateLocalUser(&hPipe, k_EAccountTypeGameServer);
+
+	// Put the binding back immediately. It is a STORED setting on ISteamClient consumed by
+	// the NEXT CreateLocalUser(), so leaving ours in place would silently hand the beacon's
+	// Steam port to whatever creates a user after us -- including the primary, if it ever
+	// re-creates its own. Restore the value CSteam3Server::Activate() would have used.
+	{
+		int primarySPort = 26900;
+		int argSteamPort = COM_CheckParm("-sport");
+		if (argSteamPort > 0)
+			primarySPort = Q_atoi(com_argv[argSteamPort + 1]);
+		pClient->SetLocalIPBinding(bindAddr, (uint16)primarySPort);
+	}
 	if (!hPipe || !hUser)
 	{
 		Con_Printf("[hl-beacon] steamclient would not create a second game-server user\n");
@@ -1023,10 +1053,6 @@ static void HLBeacon_Start()
 		Cvar_SetValue("sv_hl_beacon", 0.0f);
 		return;
 	}
-
-	uint32 unIP = 0;
-	if (net_local_adr.type == NA_IP)
-		unIP = ntohl(*(u_long *)&net_local_adr.ip[0]);
 
 	uint32 unFlags = HLB_FLAG_ACTIVE | HLB_FLAG_DEDICATED;
 #ifndef _WIN32
