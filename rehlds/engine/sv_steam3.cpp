@@ -945,6 +945,7 @@ static SOCKET            g_hHLBeaconSock     = INVALID_SOCKET;
 static double            g_fHLBeaconNextPackets = 0.0;
 static int               g_nHLBeaconIn = 0, g_nHLBeaconInOk = 0, g_nHLBeaconOut = 0;
 static double            g_fHLBeaconNextStats = 0.0;
+static uint64            g_HLBeaconSteamId   = 0;
 static HSteamUser        g_hHLBeaconUser = 0;
 static ISteamGameServer *g_pHLBeaconGS   = NULL;
 static char              g_szHLBeaconMap[64];
@@ -1022,8 +1023,13 @@ static int HLBeacon_BuildInfo(char *out, int maxlen)
 	if (gamePort == 0)
 		gamePort = (uint16)(int)hostport.value;
 	Q_memcpy(p, &gamePort, 2); p += 2;
-	uint64 sid = g_pHLBeaconGS ? g_pHLBeaconGS->GetSteamID().ConvertToUint64() : 0;
-	Q_memcpy(p, &sid, 8); p += 8;
+	// The CACHED id. This function runs on the packet path, and a steamclient call from
+	// there deadlocked the whole server: GetSteamID() is synchronous IPC over the beacon's
+	// pipe, which nothing pumps, so the engine's frame blocked inside it and steamclient
+	// itself asserted "CSteamEngine::BMainLoop appears to have stalled > 15 seconds".
+	// The game socket backed up to Recv-Q 6080 and the Sven server stopped answering
+	// anything -- one query was enough. NOTHING in this function may call steamclient.
+	Q_memcpy(p, &g_HLBeaconSteamId, 8); p += 8;
 
 	return (int)(p - out);
 }
@@ -1179,6 +1185,7 @@ static void HLBeacon_Start()
 	g_szHLBeaconMap[0] = 0;
 	g_bHLBeaconLoggedOn = false;
 	g_bHLBeaconWarned = false;
+	g_HLBeaconSteamId = 0;
 	g_fHLBeaconStarted = Sys_FloatTime();
 
 	Con_Printf("[hl-beacon] appid %u gamedir '%s' version '%s' -- answering on udp %d, advertising game port %d\n",
@@ -1205,8 +1212,8 @@ static void HLBeacon_UpdateDetails()
 	if (bNow && !g_bHLBeaconLoggedOn)
 	{
 		g_bHLBeaconLoggedOn = true;
-		Con_Printf("[hl-beacon] logged on, steamid %llu\n",
-			(unsigned long long)g_pHLBeaconGS->GetSteamID().ConvertToUint64());
+		g_HLBeaconSteamId = g_pHLBeaconGS->GetSteamID().ConvertToUint64();
+		Con_Printf("[hl-beacon] logged on, steamid %llu\n", (unsigned long long)g_HLBeaconSteamId);
 	}
 	else if (!bNow && !g_bHLBeaconWarned && fCurTime - g_fHLBeaconStarted > 30.0)
 	{
