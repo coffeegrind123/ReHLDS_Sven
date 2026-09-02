@@ -997,13 +997,6 @@ static int HLBeacon_BuildInfo(char *out, int maxlen)
 			continue;
 		if (cl->fakeclient) ++bots; else ++players;
 	}
-	int bots = 0;
-	for (int i = 0; i < g_psvs.maxclients; i++)
-	{
-		client_t *cl = &g_psvs.clients[i];
-		if (cl->active && cl->fakeclient)
-			++bots;
-	}
 
 	int maxPlayers = (int)sv_visiblemaxplayers.value;	if (maxPlayers < 0)
 		maxPlayers = g_psvs.maxclients;
@@ -1256,6 +1249,14 @@ static void HLBeacon_UpdateDetails()
 		g_bHLBeaconWarned = true;
 		Con_Printf("[hl-beacon] still not logged on after 30s -- steamclient accepted the second\n");
 		Con_Printf("[hl-beacon] registration but will not log it on; the listing will not appear\n");
+	}
+
+	int bots = 0;
+	for (int i = 0; i < g_psvs.maxclients; i++)
+	{
+		client_t *cl = &g_psvs.clients[i];
+		if (cl->active && cl->fakeclient)
+			++bots;
 	}
 
 	int maxPlayers = (int)sv_visiblemaxplayers.value;
