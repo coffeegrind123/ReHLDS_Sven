@@ -1041,6 +1041,7 @@ static void HLBeacon_Stop()
 
 	if (g_pHLBeaconGS)
 	{
+		g_pHLBeaconGS->SetAdvertiseServerActive(false);
 		g_pHLBeaconGS->LogOff();
 		g_pHLBeaconGS = NULL;
 	}
@@ -1165,6 +1166,17 @@ static void HLBeacon_Start()
 	pGS->SetModDir(sv_hl_beacon_gamedir.string);
 	pGS->SetDedicatedServer(true);
 	pGS->LogOnAnonymous();
+
+	// THE call that makes a registration appear. Without it the beacon logged on cleanly
+	// and was never listed, and -- the tell -- Steam never queried port 27016 either: the
+	// query counter stayed at 1, which was our own probe. A registration that does not
+	// advertise is not "listed but unreachable", it is invisible, and it looks identical
+	// to a broken query responder from outside.
+	//
+	// CSteam3Server::Activate() does exactly this for the primary (SetAdvertiseServerActive
+	// then SetMasterServerHeartbeatInterval); a second registration needs it just as much.
+	pGS->SetAdvertiseServerActive(true);
+	pGS->SetMasterServerHeartbeatInterval(200);
 
 	// NET_IPSocket() is the engine's portable opener (winsock/BSD, non-blocking, reuse).
 	g_hHLBeaconSock = NET_IPSocket(ipname.string, queryPort, FALSE);
