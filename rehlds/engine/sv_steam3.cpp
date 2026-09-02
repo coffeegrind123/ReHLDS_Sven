@@ -51,6 +51,17 @@ void CSteam3Server::OnLogonSuccess(SteamServersConnected_t *pLogonSuccess)
 	}
 
 	m_SteamIDGS = CRehldsPlatformHolder::get()->SteamGameServer()->GetSteamID();
+#ifdef REHLDS_SVEN
+	// Publish it for plugins. This is the ONLY place the engine learns its own Steam ID,
+	// and it is asynchronous -- it happens on logon, well after plugins have loaded -- so a
+	// plugin reading it at init would always see the default. Anything consuming this must
+	// read it late and tolerate "0".
+	{
+		char szSteamId[32];
+		Q_snprintf(szSteamId, sizeof(szSteamId), "%llu", (unsigned long long)m_SteamIDGS.ConvertToUint64());
+		Cvar_Set("sv_steamid", szSteamId);
+	}
+#endif
 	CSteam3Server::SendUpdatedServerDetails();
 }
 

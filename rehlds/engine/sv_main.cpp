@@ -239,6 +239,19 @@ cvar_t sv_allow_upload = { "sv_allowupload", "1", FCVAR_SERVER, 0.0f, NULL };
 cvar_t sv_max_upload = { "sv_uploadmax", "0.5", FCVAR_SERVER, 0.0f, NULL };
 cvar_t hpk_maxsize = { "hpk_maxsize", "4", FCVAR_ARCHIVE, 0.0f, NULL };
 cvar_t sv_visiblemaxplayers = { "sv_visiblemaxplayers", "-1", 0, 0.0f, NULL };
+#ifdef REHLDS_SVEN
+// The game server's own Steam ID, published so a PLUGIN can read it.
+//
+// ReUnion needs it for the A2S_INFO EDF_FLAG_STEAMID field and cannot get it itself: it
+// compiles against SteamGameServer011 while this engine uses SteamGameServer015, so
+// calling GetSteamID() through its own header lands on a different vtable slot. That is
+// why ReUnion ships a hardcoded placeholder with the real call commented out.
+//
+// Deliberately NOT FCVAR_SERVER: it must stay OUT of A2S_RULES. A retail Sven Co-op
+// server has no such cvar, and the point of the exercise is to be indistinguishable
+// from one. pfnCVarGetString reads it regardless of flags.
+cvar_t sv_steamid = { "sv_steamid", "0", 0, 0.0f, NULL };
+#endif
 
 cvar_t sv_downloadurl = { "sv_downloadurl", "", FCVAR_PROTECTED, 0.0f, NULL };
 cvar_t sv_allow_dlfile = { "sv_allow_dlfile", "1", 0, 0.0f, NULL };
@@ -9111,6 +9124,9 @@ void SV_Init(void)
 	Cvar_RegisterVariable(&sv_logblocks);
 	Cvar_RegisterVariable(&sv_downloadurl);
 	Cvar_RegisterVariable(&sv_version);
+#ifdef REHLDS_SVEN
+	Cvar_RegisterVariable(&sv_steamid);
+#endif
 	Cvar_RegisterVariable(&sv_allow_dlfile);
 #ifdef REHLDS_FIXES
 	Cvar_RegisterVariable(&sv_tags);
