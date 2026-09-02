@@ -152,7 +152,8 @@ jobs:
       - name: Build ReUnion (Windows)
         shell: pwsh
         run: |
-          git clone --depth 1 --branch "$env:REUNION_REF" "https://github.com/$env:REUNION_REPO.git" _reu
+          # Not shallow -- appversion.sh counts commits; see the Linux step.
+          git clone --branch "$env:REUNION_REF" "https://github.com/$env:REUNION_REPO.git" _reu
           if ($LASTEXITCODE -ne 0) { Write-Error "FATAL: clone of $env:REUNION_REPO@$env:REUNION_REF failed"; exit 1 }
           # Same toolset the engine just selected, rather than whatever the vcxproj was
           # last saved with -- an uninstalled toolset fails with an MSB8020 that reads as a
@@ -495,7 +496,11 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf _reu
-          git clone --depth 1 --branch "$REUNION_REF" \
+          # NOT --depth 1. reunion/version/appversion.sh derives the build number from
+          # `git rev-list --count`, so a shallow clone stamps it 1 -- shipping reu_version
+          # 0.2.0.1 instead of 0.2.0.27. It is wrong, not merely cosmetic: reu_version is
+          # the version operators and our own tooling read off A2S_RULES.
+          git clone --branch "$REUNION_REF" \
             "https://github.com/$REUNION_REPO.git" _reu
           # appversion.sh shells out to git to stamp APP_VERSION -- the `reu_version` that
           # shows up in A2S_RULES, and the only way to tell this build from stock on the
