@@ -952,6 +952,9 @@ struct CHLBeaconClientAccess : public ISteamClient { using ISteamClient::RunFram
 
 static HSteamPipe        g_hHLBeaconPipe = 0;
 static double            g_fHLBeaconNextPump = 0.0;
+static bool              g_bHLBeaconLoggedOn = false;
+static double            g_fHLBeaconStarted  = 0.0;
+static bool              g_bHLBeaconWarned   = false;
 static HSteamUser        g_hHLBeaconUser = 0;
 static ISteamGameServer *g_pHLBeaconGS   = NULL;
 static char              g_szHLBeaconMap[64];
@@ -1055,6 +1058,9 @@ static void HLBeacon_Start()
 	g_pHLBeaconGS   = pGS;
 	g_fHLBeaconNextUpdate = 0.0;
 	g_szHLBeaconMap[0] = 0;
+	g_bHLBeaconLoggedOn = false;
+	g_bHLBeaconWarned = false;
+	g_fHLBeaconStarted = Sys_FloatTime();
 
 	Con_Printf("[hl-beacon] appid %u gamedir '%s' version '%s' -- answering on udp %d, advertising game port %d\n",
 		(unsigned)nAppId, sv_hl_beacon_gamedir.string, sv_hl_beacon_version.string, queryPort, gamePort);
@@ -1071,6 +1077,24 @@ static void HLBeacon_UpdateDetails()
 	g_fHLBeaconNextUpdate = fCurTime + 5.0;
 	Q_strncpy(g_szHLBeaconMap, g_psv.name, sizeof(g_szHLBeaconMap) - 1);
 	g_szHLBeaconMap[sizeof(g_szHLBeaconMap) - 1] = 0;
+
+	// Whether the SECOND registration ever logs on is the whole question, and there is no
+	// console output for it: the "Connection to Steam servers successful" line belongs to
+	// CSteam3Server, i.e. the primary. Poll it -- BLoggedOn needs no callback plumbing --
+	// so a beacon that registers and then silently never lists says so.
+	bool bNow = g_pHLBeaconGS->BLoggedOn();
+	if (bNow && !g_bHLBeaconLoggedOn)
+	{
+		g_bHLBeaconLoggedOn = true;
+		Con_Printf("[hl-beacon] logged on, steamid %llu\n",
+			(unsigned long long)g_pHLBeaconGS->GetSteamID().ConvertToUint64());
+	}
+	else if (!bNow && !g_bHLBeaconWarned && fCurTime - g_fHLBeaconStarted > 30.0)
+	{
+		g_bHLBeaconWarned = true;
+		Con_Printf("[hl-beacon] still not logged on after 30s -- steamclient accepted the second\n");
+		Con_Printf("[hl-beacon] registration but will not log it on; the listing will not appear\n");
+	}
 
 	int maxPlayers = (int)sv_visiblemaxplayers.value;
 	if (maxPlayers < 0)
