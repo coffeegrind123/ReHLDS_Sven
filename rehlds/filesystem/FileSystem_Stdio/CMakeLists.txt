@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.1)
 project(filesystem_stdio CXX)
 
 option(DEBUG "Build with debug information." OFF)
+option(ASAN "Build with AddressSanitizer enabled." OFF)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,9 +16,14 @@ set(LINK_FLAGS "-m32")
 set(COMPILE_FLAGS "${COMPILE_FLAGS} -Wall -fno-exceptions -fno-strict-aliasing -fno-strict-overflow")
 
 if (DEBUG)
-	set(COMPILE_FLAGS "${COMPILE_FLAGS} -g3 -O3 -ggdb")
+	set(COMPILE_FLAGS "${COMPILE_FLAGS} -g3 -O2 -ggdb -fno-omit-frame-pointer")
 else()
 	set(COMPILE_FLAGS "${COMPILE_FLAGS} -g0 -O3 -fno-stack-protector")
+endif()
+
+if (ASAN)
+	set(COMPILE_FLAGS "${COMPILE_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+	set(LINK_FLAGS "${LINK_FLAGS} -fsanitize=address")
 endif()
 
 # Check Intel C++ compiler

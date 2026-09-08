@@ -4,6 +4,7 @@ project(hlds CXX)
 include(CheckCXXCompilerFlag)
 
 option(DEBUG "Build with debug information." OFF)
+option(ASAN "Build with AddressSanitizer enabled." OFF)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,9 +30,14 @@ if(HAS_EXECSTACK_LINK)
 endif()
 
 if (DEBUG)
-	set(COMPILE_FLAGS "${COMPILE_FLAGS} -g3 -O3 -ggdb")
+	set(COMPILE_FLAGS "${COMPILE_FLAGS} -g3 -O2 -ggdb -fno-omit-frame-pointer")
 else()
 	set(COMPILE_FLAGS "${COMPILE_FLAGS} -g0 -O3 -fno-stack-protector")
+endif()
+
+if (ASAN)
+	set(COMPILE_FLAGS "${COMPILE_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+	set(LINK_FLAGS "${LINK_FLAGS} -fsanitize=address")
 endif()
 
 # Check Intel C++ compiler
@@ -116,6 +122,10 @@ target_compile_definitions(hlds PRIVATE
 	_strdup=strdup
 	_vsnprintf=vsnprintf
 )
+
+if (ASAN)
+	target_compile_definitions(hlds PRIVATE REHLDS_ASAN)
+endif()
 
 target_sources(hlds PRIVATE
 	${COMMON_SRCS}

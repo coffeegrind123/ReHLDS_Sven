@@ -1363,7 +1363,11 @@ void LoadThisDll(const char *szDllFilename)
 		goto IgnoreThisDLL;
 	}
 #else // _WIN32
-#ifdef REHLDS_FIXES
+#if defined(REHLDS_FIXES) && defined(REHLDS_ASAN)
+	// RTLD_DEEPBIND makes the library resolve its own allocator ahead of the
+	// sanitizer runtime's interceptors, so ASan sees none of its allocations.
+	void *hDLL = dlopen(szDllFilename, RTLD_NOW | RTLD_LOCAL);
+#elif defined(REHLDS_FIXES)
 	void *hDLL = dlopen(szDllFilename, RTLD_NOW | RTLD_DEEPBIND | RTLD_LOCAL);
 #else // REHLDS_FIXES
 	void *hDLL = dlopen(szDllFilename, RTLD_NOW);
