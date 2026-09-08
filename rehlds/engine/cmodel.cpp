@@ -169,7 +169,10 @@ void CM_CalcPAS(model_t *pModel)
 			continue;
 		}
 
-		for (j = 0; j < count; j++)
+		// count is numleafs + 1, so the last leaf's bit can sit one byte past
+		// the end of a gPVSRowBytes-wide row -- and past the allocation itself
+		// on the final row.
+		for (j = 0; j < count && (j >> 3) < gPVSRowBytes; j++)
 		{
 			if (scan[j >> 3] & (1 << (j & 7)))
 			{
@@ -223,7 +226,7 @@ void CM_CalcPAS(model_t *pModel)
 			continue;
 		}
 
-		for (j = 0; j < count; j++)
+		for (j = 0; j < count && (j >> 3) < gPVSRowBytes; j++)
 		{
 			if (((byte *)dest)[j >> 3] & (1 << (j & 7)))
 			{
