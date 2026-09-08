@@ -22,6 +22,7 @@ project(engine CXX)
 
 option(DEBUG "Build with debug information." OFF)
 option(USE_STATIC_LIBSTDC "Enables static linking libstdc++." OFF)
+option(ASAN "Build with AddressSanitizer enabled." OFF)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -39,9 +40,14 @@ set(COMPILE_FLAGS "${COMPILE_FLAGS} -Wall -fno-rtti -fno-exceptions -fno-strict-
 set(COMPILE_FLAGS "${COMPILE_FLAGS} -ffunction-sections -fdata-sections")
 
 if (DEBUG)
-	set(COMPILE_FLAGS "${COMPILE_FLAGS} -g3 -O3 -ggdb")
+	set(COMPILE_FLAGS "${COMPILE_FLAGS} -g3 -O2 -ggdb -fno-omit-frame-pointer")
 else()
 	set(COMPILE_FLAGS "${COMPILE_FLAGS} -g0 -O3 -fno-stack-protector")
+endif()
+
+if (ASAN)
+	set(COMPILE_FLAGS "${COMPILE_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+	set(LINK_FLAGS "${LINK_FLAGS} -fsanitize=address")
 endif()
 
 # Check Intel C++ compiler
@@ -87,7 +93,8 @@ if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 8.0)
 	set(COMPILE_FLAGS "${COMPILE_FLAGS} -fcf-protection=none")
 endif()
 
-if (NOT DEBUG)
+# The version script hides the symbols the sanitizer runtime has to export.
+if (NOT DEBUG AND NOT ASAN)
 	set(LINK_FLAGS "${LINK_FLAGS} \
 		-Wl,-gc-sections -Wl,--version-script=\"${PROJECT_SOURCE_DIR}/../version_script.lds\"")
 endif()
@@ -251,7 +258,6 @@ target_include_directories(engine PRIVATE
 target_compile_definitions(engine PRIVATE
 	SWDS
 	REHLDS_JIT
-	REHLDS_SSE
 	REHLDS_SVEN
 	REHLDS_FIXES
 	REHLDS_CHECKS
@@ -271,8 +277,16 @@ target_compile_definitions(engine PRIVATE
 	_vsnwprintf=vswprintf
 
 	$<$<CONFIG:Unittests>:
-	REHLDS_UNIT_TESTS REHLDS_SSE REHLDS_JIT>
+	REHLDS_UNIT_TESTS REHLDS_JIT>
 )
+
+if (ASAN)
+	# math_sse.cpp trips AddressSanitizer's stack checks, which buries every
+	# other report. Build the portable math path instead.
+	target_compile_definitions(engine PRIVATE REHLDS_ASAN)
+else()
+	target_compile_definitions(engine PRIVATE REHLDS_SSE)
+endif()
 
 target_sources(engine PRIVATE
 	${COMMON_SRCS}

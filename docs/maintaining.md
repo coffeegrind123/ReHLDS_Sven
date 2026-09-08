@@ -88,3 +88,22 @@ Publishing a GitHub release triggers the build, and the `publish` job attaches
 > `gh workflow run "C/C++ CI" --ref <tag>`, which still satisfies the publish job.
 
 </details>
+
+## AddressSanitizer builds
+
+`cmake -B build -DASAN=ON` builds the engine, `hlds_linux` and `filesystem_stdio`
+with `-fsanitize=address`. Three things change with it, and all three are
+deliberate:
+
+- **`REHLDS_SSE` is off.** `mathlib_sse.cpp` trips ASan's stack checks, and the
+  report buries everything else. The portable math path is built instead.
+- **`RTLD_DEEPBIND` is dropped** when loading the game library. It resolves the
+  library's own allocator ahead of the sanitizer's interceptors, so ASan would
+  see none of the game DLL's allocations.
+- **The version script is skipped**, because it hides the symbols the sanitizer
+  runtime has to export.
+
+An ASan engine is a diagnostic build, not a deployable one. Run it locally or
+in a container that matches the build host; a locally built engine linked
+against a newer `libstdc++` than the server image only reports `Unable to load
+engine, image is corrupt` and leaves the server in a restart loop.
