@@ -1012,8 +1012,25 @@ qboolean SV_ValidClientMulticast(client_t *client, int soundLeaf, int to)
 		return TRUE;
 	}
 
+#ifdef REHLDS_SVEN
+	// The retail Sven Co-op engine spatialises against the view entity when the
+	// client has one, falling back to its own edict. Without this, effects that
+	// are in a trigger_camera's PVS but not the player's are filtered out.
+	const edict_t *viewer = client->pViewEntity ? client->pViewEntity : client->edict;
+	int bitNumber = SV_PointLeafnum((vec_t *)viewer->v.origin);
+#else
 	int bitNumber = SV_PointLeafnum(client->edict->v.origin);
-	if (mask[(bitNumber - 1) >> 3] & (1 << ((bitNumber - 1) & 7)))
+#endif
+
+	// SV_PointLeafnum answers 0 for a point that is in no leaf -- outside the
+	// world -- which indexes mask[-1].
+	int byteOffset = (bitNumber - 1) >> 3;
+	if (byteOffset < 0 || byteOffset >= gPVSRowBytes)
+	{
+		return FALSE;
+	}
+
+	if (mask[byteOffset] & (1 << ((bitNumber - 1) & 7)))
 	{
 		return TRUE;
 	}
