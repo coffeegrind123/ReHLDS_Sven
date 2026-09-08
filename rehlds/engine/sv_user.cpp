@@ -573,6 +573,7 @@ void SV_AddLinksToPM_(areanode_t *node, float *pmove_mins, float *pmove_maxs)
 	float *fmax;
 	float *fmin;
 	physent_t *pe;
+	physent_t vescratch;
 
 	for (l = node->solid_edicts.next; l != &node->solid_edicts; l = next)
 	{
@@ -604,8 +605,23 @@ void SV_AddLinksToPM_(areanode_t *node, float *pmove_mins, float *pmove_maxs)
 		}
 
 		e = NUM_FOR_EDICT(check);
-		ve = &pmove->visents[pmove->numvisent];
-		pmove->numvisent = pmove->numvisent + 1;
+
+		// visents[] holds MAX_PHYSENTS entries but, unlike physents[] and
+		// moveents[] below, was never bounded -- a busy area wrote past the end
+		// of the array and over the rest of playermove_t. The physent is copied
+		// out of *ve further down, so fill a scratch entry once the list is full
+		// rather than losing collision for everything that follows.
+		if (pmove->numvisent < MAX_PHYSENTS)
+		{
+			ve = &pmove->visents[pmove->numvisent];
+			pmove->numvisent = pmove->numvisent + 1;
+		}
+		else
+		{
+			Con_DPrintf("SV_AddLinksToPM:  pmove->numvisent >= MAX_PHYSENTS\n");
+			ve = &vescratch;
+		}
+
 		SV_CopyEdictToPhysent(ve, e, check);
 
 		if ((check->v.solid == SOLID_NOT) && (!check->v.skin || !check->v.modelindex))
