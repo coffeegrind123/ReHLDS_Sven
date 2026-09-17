@@ -53,12 +53,12 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
 
 # TODO: add support of 141_xp toolchain at VS2022+
 #      - name: Install v140, v141 and v142 toolsets
@@ -241,7 +241,7 @@ jobs:
         shell: "pwsh"
 
       - name: Deploy artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: win32
           path: publish/*
@@ -275,7 +275,7 @@ jobs:
 
     steps:
       - name: Deploying windows artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: win32
 
@@ -302,25 +302,36 @@ jobs:
       hasGpgKey: ${{ secrets.KEY_ASC != '' }}
 
     steps:
+      # Debian 11 left LTS on 2026-08-31. Its security suite's Release file then sat with
+      # an expired Valid-Until until Debian re-signed it on 09-12, and for those twelve
+      # days `apt-get update` on deb.debian.org died with exit 100:
+      #   E: Release file for .../bullseye-security/InRelease is expired (invalid since 18h ...)
+      # That is what broke this job on 09-08 (and upstream's on 09-09). The next step is
+      # the suite being moved to archive.debian.org and dropped from deb.debian.org, which
+      # fails the same way (404 -> exit 100). Neither can be shrugged off by dropping the
+      # security line: the image ships libc6 2.31-13+deb11uNN from bullseye-security, and
+      # libc6-dev must match it exactly, so that suite has to stay reachable.
+      #
+      # The image carries the answer itself: /etc/apt/sources.list has, commented out, the
+      # snapshot.debian.org lines for the exact snapshot the image was built from. Use those
+      # instead of the live mirrors. They are permanent, they contain precisely the versions
+      # already installed, and they follow the image automatically when it is rebuilt.
+      # Snapshot Release files have long-expired Valid-Until by design, hence the flag.
       - name: Install dependencies
         run: |
-          # Debian 11 reached end of LTS on 2026-08-31: the bullseye-security
-          # suite is frozen and its pool is being pruned from deb.debian.org.
-          # Keep the same toolchain, but fetch the base suite from the Debian
-          # archive and pin the security suite to its last complete snapshot.
-          # The security suite is fetched from the cloudflare snapshot mirror:
-          # plain snapshot.debian.org throttles CI bursts with connection
-          # resets, and https needs ca-certificates, which debian:11-slim
-          # does not ship, so bootstrap it from the archive first.
-          cat > /etc/apt/sources.list <<'EOF'
-          deb http://archive.debian.org/debian bullseye main
-          deb http://archive.debian.org/debian bullseye-updates main
-          EOF
-          apt-get -o Acquire::Check-Valid-Until=false update
-          apt-get install -y --no-install-recommends ca-certificates
-          echo 'deb https://snapshot-cloudflare.debian.org/archive/debian-security/20260831T000000Z bullseye-security main' > /etc/apt/sources.list.d/bullseye-security.list
-          apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=5 update
-          apt-get -o Acquire::Retries=5 install -y \
+          sed -i -e 's|^# *\(deb http://snapshot\.debian\.org/\)|\1|' \
+                 -e '/^deb http:\/\/deb\.debian\.org\//d' /etc/apt/sources.list
+          if ! grep -q '^deb http://snapshot\.debian\.org/' /etc/apt/sources.list; then
+            echo "FATAL: the image no longer ships snapshot.debian.org pins in /etc/apt/sources.list:" >&2
+            cat /etc/apt/sources.list >&2
+            exit 1
+          fi
+          cat /etc/apt/sources.list
+          printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "5";\n' \
+            > /etc/apt/apt.conf.d/99snapshot
+          dpkg --add-architecture i386
+          apt-get update
+          apt-get install -y \
             gcc-multilib g++-multilib \
             build-essential \
             libc6-dev libc6-dev-i386 \
@@ -332,7 +343,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -640,7 +651,7 @@ jobs:
         shell: bash
 
       - name: Deploy artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         id: upload-job
         with:
           name: linux32
@@ -664,15 +675,15 @@ jobs:
       # downloads would delete the artifacts. Needed so the bundling step can check the
       # salt sentinel it writes still matches the engine's REUNION_SALT_SENTINEL.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Deploying linux artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: linux32
 
       - name: Deploying windows artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: win32
 
@@ -963,7 +974,7 @@ jobs:
         shell: bash
 
       - name: Publish artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rehlds-sven-ci-${{ env.APP_VERSION }}
           path: |
