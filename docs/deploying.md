@@ -96,7 +96,7 @@ non-Steam server needs, already wired up:
 
 | path | what |
 |---|---|
-| `addons/metamod/dlls/metamod.so`, `metamod.dll` | [metamod-fallguys](https://github.com/hzqst/metamod-fallguys) `1.21p38` — note the `dlls/` subdirectory |
+| `addons/metamod/dlls/metamod.so`, `metamod.dll` | [metamod-svencoop](https://github.com/metamod-svencoop/metamod-svencoop) `v20261009a` — note the `dlls/` subdirectory |
 | `addons/metamod/config.ini` | points metamod at the real game library (key: `gamedll`) |
 | `addons/metamod/plugins.ini` | plugin list, ReUnion first |
 | `addons/reunion/reunion_mm_i386.so`, `reunion_mm.dll` | [ReUnion](https://github.com/rehlds/reunion) `0.2.0.25` |

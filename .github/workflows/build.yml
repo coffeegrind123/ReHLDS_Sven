@@ -13,8 +13,9 @@ on:
     types: [published]
   workflow_dispatch:
 
-# The plugin host bundled into gamedir/ is metamod-fallguys (hzqst/metamod-fallguys), a
-# metamod-p fork whose declared target is Sven Co-op. It replaced Metamod-R on 2026-08-23.
+# The plugin host bundled into gamedir/ is metamod-svencoop (metamod-svencoop/metamod-svencoop,
+# formerly hzqst/metamod-fallguys), a metamod-p fork whose declared target is Sven Co-op.
+# It replaced Metamod-R on 2026-08-23.
 #
 # ⚠ ONE ref for BOTH halves, and it must stay that way. The Linux binary is BUILT FROM
 # SOURCE in the `linux` job (see there for why the published .so is unusable) while the
@@ -22,7 +23,7 @@ on:
 # gamedir/ whose halves were built from different source, and nothing downstream would
 # notice. A TAG is used rather than a commit because only a tag has release assets.
 env:
-  MMFG_REF: 'v20260730a'
+  METAMOD_REF: 'v20261009a'
   # ReUnion is OURS, and is BUILT rather than downloaded -- for a sharper reason than
   # metamod's. Upstream's binary is not merely inconvenient here, it is WRONG for this
   # game: it writes the appid into the 16-bit A2S ID field only, and Sven Co-op's 225840
@@ -336,7 +337,7 @@ jobs:
             build-essential \
             libc6-dev libc6-dev-i386 \
             git cmake rsync \
-            ca-certificates \
+            ca-certificates curl \
             g++ gcc
 
       - name: Configure
@@ -440,15 +441,12 @@ jobs:
           git checkout -- rehlds/CMakeLists.txt
         shell: bash
 
-      # ⚠⚠ BUILT HERE, NOT DOWNLOADED — and upstream's README says the opposite.
+      # ⚠⚠ BUILT HERE, NOT DOWNLOADED. The published .so is unusable on the targets.
       #
-      # metamod-fallguys claims its makefile forces glibc 2.24 so "the compiled binaries
-      # (.so) are portable now". True of the MAKE path (metamod/Makefile sets GLIBCHEADER,
-      # fed to -include by metamod/Config.mak) and false of what actually ships: its CI runs
-      # scripts/build-all-opt.linux_i386.sh, whose last step is the CMAKE script, and that
-      # script's -DLINK_AGAINST_OLDER_GLIBC=TRUE -DOLDER_GLIBC_PATH=... is a flag NO
-      # CMakeLists.txt in that tree reads. It is silently ignored and the binary inherits
-      # ubuntu-24.04's glibc. Measured on release v20260730a: GLIBC_2.38.
+      # metamod-svencoop's CI builds on ubuntu-24.04 and upstream dropped its glibc
+      # portability machinery (c41ff566, "drop glibc portability machinery"), so the
+      # release binary inherits that runner's glibc. Measured on release v20261009a
+      # (and v20260730a before it): GLIBC_2.38.
       #
       # This job is the only bullseye (GLIBC_2.31) environment in the workflow -- `publish`
       # is a bare ubuntu-24.04 runner and building there would reproduce the exact bug. So
@@ -457,46 +455,42 @@ jobs:
       # It lands in publish/plugins/ rather than publish/bin/, because the packaging step
       # archives `bin/ hlsdk/ gamedir/` by name -- this is a build intermediate that must
       # reach the bundling step without becoming a release path of its own.
-      - name: Build metamod-fallguys (Linux)
+      - name: Build metamod-svencoop (Linux)
+        env:
+          # The tree requires CMake 3.21; bullseye ships 3.18.4. Kitware's binary is static
+          # against glibc 2.17, runs in this container, and is used for this step only, so
+          # the engine build above keeps the distro cmake it has always been tested with.
+          CMAKE_VER: '3.31.9'
+          CMAKE_SHA256: '312d78e0b7c5c9b4a97a87a46c3e525aa84895fe8135c238c4616bba73dc9518'
         run: |
           set -euo pipefail
-          rm -rf _mmfg
-          git clone --depth 1 --branch "$MMFG_REF" \
-            https://github.com/hzqst/metamod-fallguys.git _mmfg
-          # capstone + procmap only: metamod links both with --whole-archive. bullet3 is
-          # needed solely by the `fallguys` plugin, which this overlay does not ship.
-          git -C _mmfg submodule update --init --recursive \
-            thirdparty/capstone_fork thirdparty/procmap_fork
-          cd _mmfg
-          # These two install prefixes are HARDCODED in metamod-fallguys' top-level
-          # CMakeLists.txt as thirdparty/install/<lib>/opt.linux_i386, where the
-          # `opt.linux_i386` half is derived from CMAKE_BUILD_TYPE != Debug. Changing the
-          # build type moves the prefix and the metamod link then fails to find them.
-          cmake -S thirdparty/procmap_fork -B thirdparty/build/procmap/opt.linux_i386 \
-            -DCMAKE_INSTALL_PREFIX="$PWD/thirdparty/install/procmap/opt.linux_i386" \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-m32 -DCMAKE_CXX_FLAGS=-m32 >/dev/null
-          cmake --build thirdparty/build/procmap/opt.linux_i386 --target install -j"$(nproc)" >/dev/null
-          cmake -S thirdparty/capstone_fork -B thirdparty/build/capstone/opt.linux_i386 \
-            -DCMAKE_INSTALL_PREFIX="$PWD/thirdparty/install/capstone/opt.linux_i386" \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-m32 -DCMAKE_CXX_FLAGS=-m32 \
-            -DCAPSTONE_ARCHITECTURE_DEFAULT=FALSE -DCAPSTONE_X86_SUPPORT=TRUE \
-            -DCAPSTONE_BUILD_SHARED=FALSE -DCAPSTONE_BUILD_STATIC=TRUE \
-            -DCAPSTONE_BUILD_CSTOOL=FALSE -DCAPSTONE_BUILD_TESTS=FALSE \
-            -DCAPSTONE_INSTALL=TRUE >/dev/null
-          cmake --build thirdparty/build/capstone/opt.linux_i386 --target install -j"$(nproc)" >/dev/null
-          # --whole-archive needs these to exist as STATIC libs; a missing one fails the
-          # link with a bare -lcapstone/-lprocmap error that names no prefix.
-          for a in thirdparty/install/procmap/opt.linux_i386/lib/libprocmap.a \
-                   thirdparty/install/capstone/opt.linux_i386/lib/libcapstone.a; do
-            [ -f "$a" ] || { echo "FATAL: $a was not produced" >&2; exit 1; }
+          rm -rf _mmfg _cmake
+          curl -fsSL -o cmake.tgz \
+            "https://github.com/Kitware/CMake/releases/download/v$CMAKE_VER/cmake-$CMAKE_VER-linux-x86_64.tar.gz"
+          echo "$CMAKE_SHA256  cmake.tgz" | sha256sum -c -
+          mkdir _cmake && tar -xzf cmake.tgz -C _cmake --strip-components=1 && rm cmake.tgz
+          CMAKE="$PWD/_cmake/bin/cmake"
+
+          git clone --depth 1 --branch "$METAMOD_REF" \
+            https://github.com/metamod-svencoop/metamod-svencoop.git _mmfg
+          # metamod is its own repo now (a submodule here), and capstone + procmap are ITS
+          # submodules. Only that one is initialised: fallguys pulls bullet3 and the
+          # angelscript plugins pull the AngelScript SDK, none of which this overlay ships.
+          git -C _mmfg submodule update --init --recursive metamod
+          for f in thirdparty/capstone_fork/include/capstone/capstone.h \
+                   thirdparty/procmap_fork/CMakeLists.txt; do
+            # Without these, cmake/Dependencies.cmake silently FetchContent's its own pinned
+            # copies instead -- a build from source nobody pinned here.
+            [ -f "_mmfg/metamod/$f" ] || { echo "FATAL: _mmfg/metamod/$f missing" >&2; exit 1; }
           done
-          # Named target, not `--target install`: the top-level install() lists all six
-          # products and would drag in fallguys, hence bullet3.
-          cmake -B build-cmake/opt.linux_i386 -S . -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-cmake/opt.linux_i386 -j"$(nproc)" --target metamod
-          cd ..
+          # Configured from metamod/ itself, not the aggregate root: the root CMakeLists
+          # add_subdirectory()s all six components and fails without their submodules.
+          # capstone and procmap are built inline as static libs (mmfg_capstone_library /
+          # mmfg_procmap_library), so there are no install prefixes to stage any more.
+          "$CMAKE" -S _mmfg/metamod -B _mmfg/build -DCMAKE_BUILD_TYPE=Release
+          "$CMAKE" --build _mmfg/build -j"$(nproc)" --target metamod
           mkdir -p publish/plugins
-          src=$(find _mmfg/build-cmake/opt.linux_i386/output -name 'metamod.so' -print -quit)
+          src=$(find _mmfg/build -name 'metamod.so' -not -path '*/vendor/*' -print -quit)
           [ -n "$src" ] || { echo "FATAL: metamod.so was not produced" >&2; exit 1; }
           cp "$src" publish/plugins/metamod.so
           # The engine loads this as a game DLL. Without these entry points it reports only
@@ -620,10 +614,10 @@ jobs:
       # threshold argument. 2.11 is upstream ReHLDS's ENGINE portability target -- it is
       # about running on ancient distros, not about this fork's deployment targets.
       #
-      # metamod-fallguys makes no such claim and cannot meet it: its own published build
-      # needs GLIBC_2.38, and even the "portable" glibc-forcing path its README describes
-      # targets 2.24, still above 2.11. Holding it to the engine's number would block the
-      # bundle for no gain. The number that actually matters is the documented runtime,
+      # metamod-svencoop makes no such claim and cannot meet it: its own published build
+      # needs GLIBC_2.38, and the glibc-forcing path it used to have (dropped upstream in
+      # c41ff566) targeted 2.24, still above 2.11. Holding it to the engine's number would
+      # block the bundle for no gain. The number that actually matters is the documented runtime,
       # debian bullseye = GLIBC_2.31, so that is what is asserted here.
       #
       # ⚠ Do NOT "fix" a future failure of this step by lowering glibc_test.sh's 2.11 --
@@ -631,7 +625,7 @@ jobs:
       #
       # CXXABI/GLIBCXX are not checked: metamod links -static-libstdc++ -static-libgcc, so
       # it has no libstdc++ dependency at all (NEEDED is libdl, libc, ld-linux only).
-      - name: Check metamod-fallguys glibc floor
+      - name: Check metamod-svencoop glibc floor
         run: |
           set -euo pipefail
           f=publish/plugins/metamod.so
@@ -701,7 +695,7 @@ jobs:
           fi
           rm -f appversion.h
 
-      - name: Bundle metamod-fallguys and ReUnion into gamedir/
+      - name: Bundle metamod-svencoop and ReUnion into gamedir/
         env:
           # REUNION_VERSION is gone: ReUnion is no longer downloaded here. Both halves are
           # built from $REUNION_REPO@$REUNION_REF in the linux and windows jobs.
@@ -715,17 +709,18 @@ jobs:
           #              the published .so needs GLIBC_2.38 and cannot load on the bullseye
           #              targets this fork ships for), arriving via the linux32 artifact.
           #   windows -> the release asset, which has no glibc to be wrong about.
-          # Both are pinned to $MMFG_REF at the workflow level so they cannot drift apart.
+          # Both are pinned to $METAMOD_REF at the workflow level so they cannot drift apart.
           [ -f plugins/metamod.so ] || {
             echo "FATAL: plugins/metamod.so missing from the linux32 artifact." >&2
-            echo "       The 'Build metamod-fallguys (Linux)' step in the linux job is what" >&2
+            echo "       The 'Build metamod-svencoop (Linux)' step in the linux job is what" >&2
             echo "       produces it; do NOT substitute the upstream release asset here." >&2
             exit 1; }
-          gh release download "$MMFG_REF" --repo hzqst/metamod-fallguys \
+          # The asset still carries the pre-rename name.
+          gh release download "$METAMOD_REF" --repo metamod-svencoop/metamod-svencoop \
             --pattern 'metamod-fallguys-windows-x86.zip' -O _plug/mm.zip
           unzip -q _plug/mm.zip -d _plug/mm
 
-          # ⚠ metamod-fallguys lives in addons/metamod/DLLS/, not addons/metamod/ as
+          # ⚠ metamod-svencoop lives in addons/metamod/DLLS/, not addons/metamod/ as
           # Metamod-R did. Whatever writes liblist.gam downstream must point at
           # "addons/metamod/dlls/metamod.so" -- this overlay does not ship liblist.gam,
           # so that path change does NOT propagate on its own.
@@ -758,7 +753,7 @@ jobs:
           # ⚠⚠ THE KEY IS `gamedll`, AND THIS INVERTS WHAT THIS FILE SAID UNTIL 2026-08-23.
           # Under Metamod-R a bare `gamedll` line was HARMFUL: it was applied over
           # gamedll_linux on Linux too, so the server tried to load dlls\server.dll and died
-          # with "Failure to load game DLL" after Metamod's full banner. metamod-fallguys is
+          # with "Failure to load game DLL" after Metamod's full banner. metamod-svencoop is
           # metamod-p derived and its option table (metamod/metamod.cpp, global_options[])
           # has exactly ONE entry -- {"gamedll", CF_PATH, ...}. There is no gamedll_linux and
           # no gamedll_win32; the old key is simply unrecognised.
@@ -773,7 +768,7 @@ jobs:
           # Windows deployments comment the linux line and uncomment the windows one --
           # one key means the per-OS choice has to be made in the file.
           cat > gamedir/addons/metamod/config.ini <<'EOF'
-          // metamod-fallguys (metamod-p) config. gamedll is the REAL game library;
+          // metamod-svencoop (metamod-p) config. gamedll is the REAL game library;
           // liblist.gam points at metamod itself, so without this line metamod would
           // recurse into itself.
           //
@@ -798,7 +793,7 @@ jobs:
           # "reunion" comes back empty on a perfectly healthy server. `meta list` showing
           # "[ 1] Reunion  RUN" is the only proof.
           cat > gamedir/addons/metamod/plugins.ini <<'EOF'
-          ; metamod-fallguys plugin list. ReUnion MUST be first -- it intercepts the
+          ; metamod-svencoop plugin list. ReUnion MUST be first -- it intercepts the
           ; connect/auth path, so anything loaded before it can see clients it would
           ; have rejected.
           linux addons/reunion/reunion_mm_i386.so
