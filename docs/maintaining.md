@@ -26,7 +26,8 @@ for further releases on the same upstream base and resets after a rebase.
 
 ## Bundled plugin versions
 
-metamod-fallguys and ReUnion are **pinned** in `.github/workflows/build.yml` (`MMFG_REF`, and
+[metamod-svencoop](https://github.com/metamod-svencoop/metamod-svencoop) (formerly
+hzqst/metamod-fallguys) and ReUnion are **pinned** in `.github/workflows/build.yml` (`METAMOD_REF`, and
 `REUNION_REPO`/`REUNION_REF`, all at the workflow level) rather than tracking "latest", so a
 release is reproducible and only ships versions this stack has actually been run against.
 Bump them deliberately.
@@ -50,24 +51,28 @@ the Steam browser omits it.
 > `REUNION_REF` is currently a **branch**, not a tag. Pin it to a tag once the fork cuts one,
 > or a release is not reproducible.
 
-`MMFG_REF` is one ref for **both** halves of metamod, and that is load-bearing. The Linux
+`METAMOD_REF` is one ref for **both** halves of metamod, and that is load-bearing. The Linux
 `.so` is **built from source** in the `linux` job; the Windows `.dll` comes from that ref's
 release asset. Pinning them separately would ship a `gamedir/` whose halves were built from
 different source, and nothing downstream would notice.
 
-⚠ The Linux binary cannot be downloaded, and upstream's README says otherwise. It claims the
-makefile forces glibc 2.24 so the shipped `.so` is portable — true of the *make* path, false
-of what ships, because metamod-fallguys' own CI ends on its **cmake** script and
-`-DLINK_AGAINST_OLDER_GLIBC=TRUE` is a flag no `CMakeLists.txt` in that tree reads. Measured
-on release `v20260730a`: **`GLIBC_2.38`**, against deployment targets that supply `GLIBC_2.31`.
+⚠ The Linux binary cannot be downloaded. Upstream builds its release on `ubuntu-24.04` and
+dropped its glibc portability machinery in `c41ff566`, so the shipped `.so` inherits that
+runner's glibc. Measured on releases `v20260730a` and `v20261009a`: **`GLIBC_2.38`**, against
+deployment targets that supply `GLIBC_2.31`.
 So it is compiled in the `linux` job — the only bullseye environment here; `publish` is a bare
 `ubuntu-24.04` runner where building would reproduce the bug exactly — and its glibc floor is
 asserted before it is uploaded.
 
+The build configures `metamod/` (a submodule of its own since upstream's `6e01b640`) rather
+than the aggregate root, which `add_subdirectory()`s every plugin and fails without their
+submodules. That tree needs CMake 3.21 and bullseye ships 3.18, so the step fetches Kitware's
+binary, hash-pinned (`CMAKE_VER`/`CMAKE_SHA256` on the step), for that step only.
+
 ⚠ That assertion is **separate from `glibc_test.sh`**, on a deliberately different threshold.
 The engine's script hardcodes `GLIBC 2.11`, which is upstream ReHLDS's portability target for
-ancient distros; metamod-fallguys cannot meet it (its own release needs 2.38, and even the
-glibc-forcing path its README describes targets 2.24). The number that matters for this fork
+ancient distros; metamod-svencoop cannot meet it (its own release needs 2.38, and even the
+glibc-forcing path it used to have targeted 2.24). The number that matters for this fork
 is the documented runtime, bullseye = **2.31**. Do not reconcile the two by lowering
 `glibc_test.sh` — that weakens the *engine's* guarantee to accommodate a plugin.
 
