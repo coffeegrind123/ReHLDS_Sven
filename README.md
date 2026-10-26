@@ -25,7 +25,7 @@ Along with reverse engineering, a lot of defects and (potential) bugs were found
 |---|---|
 | **Sven Co-op protocol** | Protocol 48 as Svengine speaks it: widened user messages, long-encoded coords and fragment headers, raised `qlimits`, no packet munging, Sven's consistency/delta framing |
 | **Mixed Sven + Half-Life clients** | The dialect is chosen **per client, at runtime**, so retail Sven Co-op 5.26 players and stock Half-Life players (vanilla, or the [SevenKewp](https://github.com/wootguy/SevenKewp) client) can play on the same server — see [Mixed Sven and Half-Life clients](#mixed-sven-and-half-life-clients) |
-| **Ready-to-run plugin stack** | Releases bundle [metamod-svencoop](https://github.com/metamod-svencoop/metamod-svencoop) + [ReUnion](https://github.com/rehlds/reunion) in a `gamedir/` tree, configured to accept non-Steam clients |
+| **Ready-to-run plugin stack** | Releases bundle [metamod-svencoop](https://github.com/metamod-svencoop/metamod-svencoop) + [ReUnion](https://github.com/coffeegrind123/ReUnion/tree/sven-retail-serverinfo) (our fork, which reports Sven's real appid to the server browser) in a `gamedir/` tree, configured to accept non-Steam clients |
 | **Automatic ReUnion salt** | The engine generates a per-server `SteamIdHashSalt` on first run and preserves it across upgrades |
 | **Sven-specific cvars** | `sv_rehlds_sven_block_game_bans`, `sv_rehlds_sven_tolerate_steam_deny`, `sv_rehlds_maxusrcmdprocessticks`, `sv_rehlds_force_allow_lagcompensation`, `sv_log_daily` |
 | **Retail `server.so` fixes** | Recovers from the unterminated `MESSAGE_BEGIN` that killed servers ~30x/day, fixes a `DELTA_ParseDelta` stack overflow, honours `-nobreakpad` |
