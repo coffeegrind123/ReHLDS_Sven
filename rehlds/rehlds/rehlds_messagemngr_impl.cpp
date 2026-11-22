@@ -392,6 +392,15 @@ void MessageImpl::clear()
 	m_modifiedDataBits = 0;
 }
 
+// How a coordinate is stored in gMsgBuffer. A REHLDS_SVEN build writes every coordinate as a
+// long (PF_WriteCoord_I: Svengine's wire width, narrowed per client for Half-Life clients
+// later), so reading or writing one as a short here would touch the wrong bytes.
+#ifdef REHLDS_SVEN
+typedef int32 MsgCoord_t;
+#else
+typedef int16 MsgCoord_t;
+#endif
+
 // An array containing fixed sizes for various types of parameters
 static size_t SIZEOF_PARAMTYPE[] =
 {
@@ -400,7 +409,7 @@ static size_t SIZEOF_PARAMTYPE[] =
 	sizeof(int16),  // Short
 	sizeof(uint32), // Long
 	sizeof(uint8),  // Angle
-	sizeof(int16),  // Coord
+	sizeof(MsgCoord_t), // Coord
 	0,              // String
 	sizeof(int16),  // Entity
 };
@@ -464,7 +473,7 @@ void MessageImpl::setParamPrimitive(size_t index, T value, bool sign)
 		break;
 	case IMessage::ParamType::Coord:
 		// Convert coordinate value to short integer representation with loss of precision
-		setValue<int16>(pbuf, (int)(value * 8.0));
+		setValue<MsgCoord_t>(pbuf, (int)(value * 8.0));
 		break;
 	default:
 		return; // bad type
@@ -553,7 +562,7 @@ float MessageImpl::getParamFloat(size_t index) const
 	case IMessage::ParamType::Angle:
 		return (float)((uint8)getValueInt<uint8>(buf) * (360.0 / 256.0));
 	case IMessage::ParamType::Coord:
-		return (float)((int16)getValueInt<int16>(buf) * (1.0 / 8));
+		return (float)((MsgCoord_t)getValueInt<MsgCoord_t>(buf) * (1.0 / 8));
 	default:
 		break; // bad type
 	}
@@ -615,7 +624,7 @@ float MessageImpl::getOriginalParamFloat(size_t index) const
 	case IMessage::ParamType::Angle:
 		return (float)((uint8)getValueInt<uint8>(buf) * (360.0 / 256.0));
 	case IMessage::ParamType::Coord:
-		return (float)((int16)getValueInt<int16>(buf) * (1.0 / 8));
+		return (float)((MsgCoord_t)getValueInt<MsgCoord_t>(buf) * (1.0 / 8));
 	default:
 		break; // bad type
 	}
@@ -662,12 +671,12 @@ void MessageImpl::setParamVec(size_t index, const float *pos)
 	// Get the parameter position in the buffer
 	Param_t &param = m_params[index];
 
-	int16 *pbuf = (int16 *)(m_Storage[BACK].buf.data + param.posBack);
+	MsgCoord_t *pbuf = (MsgCoord_t *)(m_Storage[BACK].buf.data + param.posBack);
 
 	// Set each component of the vector parameter
-	*(int16 *)pbuf++ = (int16)(pos[0] * 8.0);
-	*(int16 *)pbuf++ = (int16)(pos[1] * 8.0);
-	*(int16 *)pbuf++ = (int16)(pos[2] * 8.0);
+	*pbuf++ = (MsgCoord_t)(pos[0] * 8.0);
+	*pbuf++ = (MsgCoord_t)(pos[1] * 8.0);
+	*pbuf++ = (MsgCoord_t)(pos[2] * 8.0);
 
 	// Mark message as modified
 	param.modified = true;
@@ -783,7 +792,7 @@ void MessageImpl::resetParam(size_t index)
 		setValue<uint8>(pbackbuf, getValueInt<uint8>(pfrontbuf));
 		break;
 	case IMessage::ParamType::Coord:
-		setValue<int16>(pbackbuf, getValueInt<int16>(pfrontbuf));
+		setValue<MsgCoord_t>(pbackbuf, getValueInt<MsgCoord_t>(pfrontbuf));
 		break;
 	case IMessage::ParamType::String:
 		// Return the original string value from the front buffer
