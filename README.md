@@ -1,4 +1,4 @@
-# ReHLDS_Sven [![C/C++ CI](https://github.com/coffeegrind123/ReHLDS_Sven/actions/workflows/build.yml/badge.svg)](https://github.com/coffeegrind123/ReHLDS_Sven/actions/workflows/build.yml) [![GitHub release](https://img.shields.io/github/v/release/coffeegrind123/ReHLDS_Sven?display_name=tag)](https://github.com/coffeegrind123/ReHLDS_Sven/releases/latest) ![GitHub all releases](https://img.shields.io/github/downloads/coffeegrind123/ReHLDS_Sven/total) [![Upstream](https://img.shields.io/badge/upstream-rehlds%2FReHLDS%203.15.0.907-blue)](https://github.com/rehlds/ReHLDS) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE) <img align="right" width="128" src="https://cdn2.steamgriddb.com/icon_thumb/6a9aeddfc689c1d0e3b9ccc3ab651bc5.png" alt="Sven Co-op" />
+# ReHLDS_Sven [![C/C++ CI](https://github.com/coffeegrind123/ReHLDS_Sven/actions/workflows/build.yml/badge.svg)](https://github.com/coffeegrind123/ReHLDS_Sven/actions/workflows/build.yml) [![GitHub release](https://img.shields.io/github/v/release/coffeegrind123/ReHLDS_Sven?display_name=tag)](https://github.com/coffeegrind123/ReHLDS_Sven/releases/latest) ![GitHub all releases](https://img.shields.io/github/downloads/coffeegrind123/ReHLDS_Sven/total) [![Upstream](https://img.shields.io/badge/upstream-rehlds%2FReHLDS%203.15.0.932-blue)](https://github.com/rehlds/ReHLDS) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE) <img align="right" width="128" src="media/re_sven1.png" alt="ReHLDS_Sven logo" />
 Reverse-engineered (and bugfixed) HLDS, extended to speak the Sven Co-op protocol
 
 ## What is this?
@@ -29,6 +29,7 @@ Along with reverse engineering, a lot of defects and (potential) bugs were found
 | **Automatic ReUnion salt** | The engine generates a per-server `SteamIdHashSalt` on first run and preserves it across upgrades |
 | **Sven-specific cvars** | `sv_rehlds_sven_block_game_bans`, `sv_rehlds_sven_tolerate_steam_deny`, `sv_rehlds_maxusrcmdprocessticks`, `sv_rehlds_force_allow_lagcompensation`, `sv_log_daily` |
 | **Retail `server.so` fixes** | Recovers from the unterminated `MESSAGE_BEGIN` that killed servers ~30x/day, fixes a `DELTA_ParseDelta` stack overflow, honours `-nobreakpad` |
+| **Svengine's tolerance of missing WADs** | A WAD a map names but the server lacks is reported and skipped, as retail does, instead of shutting the server down — official `sandstone` names one no install ships |
 | **Steam deny diagnostics** | Every Steam client deny is logged with its reason code, and the four Steam-*connectivity* reasons no longer drop legitimate players |
 
 
@@ -261,6 +262,12 @@ Select the preferred C/C++ Compiler installation
 
 📖 **[docs/maintaining.md](docs/maintaining.md)** — versioning against upstream, rebasing onto
 a newer ReHLDS, release tagging, and the pinned plugin versions.
+
+
+## Credits
+
+The logo is by anewnick (cdqke), made for
+[ScriptedSnark/svencoop_sdk](https://github.com/ScriptedSnark/svencoop_sdk).
 
 
 ## How can I help the project?
