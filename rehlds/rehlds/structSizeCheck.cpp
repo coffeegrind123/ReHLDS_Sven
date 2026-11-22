@@ -13,7 +13,11 @@ void check_size() {
 
 
 void checkSizesStatic() {
+#ifndef REHLDS_SVEN
+	// REHLDS_SVEN raises the qlimits arrays embedded in client_t, so it cannot keep the stock size;
+	// unittests/struct_offsets_tests.cpp reports the Sven layout instead.
 	CHECK_TYPE_SIZE(client_t, 0x5018, 0x4EF4);
+#endif
 	CHECK_TYPE_SIZE(userfilter_t, 0x20, 0x18);
 #ifndef REHLDS_FIXES
 	CHECK_TYPE_SIZE(CSteam3Server, 0x90, 0xA8);
