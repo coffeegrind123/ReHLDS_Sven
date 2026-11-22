@@ -122,13 +122,13 @@ bool SV_ReadModelBoundsResponse(const resource_t *r)
 	MSG_ReadBitData(cmins, 12);
 	MSG_ReadBitData(cmaxs, 12);
 
-	// Requirement is stored scrambled
 	unsigned char required[sizeof(r->rguc_reserved)];
 	Q_memcpy(required, r->rguc_reserved, sizeof(required));
-#ifdef REHLDS_SVEN
-	if (SV_Proto_ClientIsHL(host_client))
-#endif //REHLDS_SVEN
+#ifndef REHLDS_SVEN
+	// Requirement is stored scrambled. A REHLDS_SVEN build stores it plain for every
+	// dialect (SV_SetupModelConsistency) and munges only what it sends a Half-Life client.
 	COM_UnMunge(required, sizeof(required), g_psvs.spawncount);
+#endif //!REHLDS_SVEN
 
 	vec3_t mins;
 	vec3_t maxs;
@@ -185,7 +185,12 @@ void SV_ParseConsistencyResponse(client_t *pSenderClient)
 	// Read consistency info
 	while (MSG_ReadBits(1))
 	{
-		int idx = MSG_ReadBits(16);
+#ifdef REHLDS_SVEN
+		// Svengine answers with a 16-bit index; a Half-Life client with stock's 12 bits.
+		int idx = MSG_ReadBits(SV_Proto_ClientIsHL(host_client) ? 12 : 16);
+#else //!REHLDS_SVEN
+		int idx = MSG_ReadBits(12);
+#endif //REHLDS_SVEN
 #ifdef REHLDS_SVEN
 		// A Half-Life client answers with positions in the filtered list it was
 		// sent, so map back before indexing the real array.

@@ -1460,6 +1460,18 @@ void EXT_FUNC SV_SendResources_internal(sizebuf_t *msg)
 		else
 		{
 			MSG_WriteBits(1, 1);
+#ifdef REHLDS_SVEN
+			// The requirement is stored plain because Svengine reads it plain; a stock
+			// Half-Life client un-munges it, so it gets the munged form stock HLDS stores.
+			if (resIsHL)
+			{
+				unsigned char munged[sizeof(r->rguc_reserved)];
+				Q_memcpy(munged, r->rguc_reserved, sizeof(munged));
+				COM_Munge(munged, sizeof(munged), g_psvs.spawncount);
+				MSG_WriteBitData(munged, sizeof(munged));
+			}
+			else
+#endif // REHLDS_SVEN
 			MSG_WriteBitData(r->rguc_reserved, sizeof(r->rguc_reserved));
 		}
 	}
