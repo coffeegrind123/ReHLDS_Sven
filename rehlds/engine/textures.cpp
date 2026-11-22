@@ -100,6 +100,33 @@ qboolean TEX_InitFromWad(char *path)
 		if (Q_strstr(wadName, "pldecal") || Q_strstr(wadName, "tempdecal"))
 			continue;
 
+#ifdef REHLDS_SVEN
+		// Svengine treats a WAD it cannot use as the map's problem, not the server's: it
+		// prints and carries on, and the textures it would have held are reported missing
+		// one by one by TEX_LoadLump. Official maps depend on that -- sandstone names
+		// hezus_dev.wad, which no Sven Co-op install ships, and a Sys_Error here took the
+		// server down every time the map cycle reached it. Messages and the skip list are
+		// retail engine_i686.so's (the per-WAD loader at 0x7CEF0).
+		if (!Q_stricmp(wadName, "gfx") || !Q_stricmp(wadName, "cached") || !Q_stricmp(wadName, "fonts"))
+		{
+			Con_DPrintf("Skipping WAD File '%s'\n", wadPath);
+			continue;
+		}
+
+		if (nTexFiles >= (int)ARRAYSIZE(texfiles))
+		{
+			Con_Printf("Error: Could not load '%s'. Too many WAD files (%d max).\n", wadPath, (int)ARRAYSIZE(texfiles));
+			continue;
+		}
+
+		texfile = FS_Open(wadPath, "rb");
+		if (!texfile)
+		{
+			Con_Printf("Error: '%s' not found.\n", wadPath);
+			continue;
+		}
+#endif // REHLDS_SVEN
+
 #ifdef REHLDS_FIXES
 		if (g_psv.state == ss_loading
 		 && Q_stricmp(wadPath, "halflife.wad")
@@ -108,15 +135,26 @@ qboolean TEX_InitFromWad(char *path)
 			PF_precache_generic_I(wadPath);
 #endif // REHLDS_FIXES
 
+#ifndef REHLDS_SVEN
 		texfile = FS_Open(wadPath, "rb");
 		if (!texfile)
 			Sys_Error("%s: couldn't open %s\n", __func__, wadPath);
+#endif // !REHLDS_SVEN
 
 		texfiles[nTexFiles++] = texfile;
 		Con_DPrintf("Using WAD File: %s\n", wadPath);
 		SafeRead(texfile, &header, 12);
 		if (Q_strncmp(header.identification, "WAD2", 4) && Q_strncmp(header.identification, "WAD3", 4))
+		{
+#ifdef REHLDS_SVEN
+			Con_Printf("Error: '%s' isn't a valid WAD file.\n", wadPath);
+			FS_Close(texfile);
+			texfiles[--nTexFiles] = NULL;
+			continue;
+#else // !REHLDS_SVEN
 			Sys_Error("%s: %s isn't a wadfile", __func__, wadPath);
+#endif // REHLDS_SVEN
+		}
 
 		header.numlumps = LittleLong(header.numlumps);
 		header.infotableofs = LittleLong(header.infotableofs);
